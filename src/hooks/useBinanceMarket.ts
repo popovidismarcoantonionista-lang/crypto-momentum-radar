@@ -40,7 +40,7 @@ export function useBinanceMarket() {
       try {
         const r = await fetch(`${REST}/klines?symbol=${s}&interval=1m&limit=60`);
         const rows = (await r.json()) as (string | number)[][];
-        const klines = rows.map((k) => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] }));
+        const klines = rows.map((k) => ({ t: +k[0]!, o: +k[1]!, h: +k[2]!, l: +k[3]!, c: +k[4]!, v: +k[5]! }));
         market.current[s] = { ...(market.current[s] ?? { bids: [], asks: [], change24: 0 }), klines, price: klines.at(-1)?.c ?? 0 };
       } catch { /* ignore */ }
     });
@@ -54,15 +54,15 @@ export function useBinanceMarket() {
         const { stream, data } = JSON.parse(ev.data);
         const sym = String(stream).split("@")[0].toUpperCase();
         if (sym === "USDTBRL") { brl.current = +data.c; return; }
-        const st = (market.current[sym] ??= { klines: [], bids: [], asks: [], price: 0, change24: 0 });
+        const st: SymState = (market.current[sym] ??= { klines: [], bids: [], asks: [], price: 0, change24: 0 });
         if (stream.includes("@kline")) {
           const k = data.k; const kl = { t: k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v };
           const last = st.klines.at(-1);
-          if (last && last.t === kl.t) st.klines[st.klines.length - 1] = kl; else { st.klines.push(kl); if (st.klines.length > 120) st.klines.shift(); }
+          if (last && last.t === kl.t) st.klines[st.klines.length - 1] = kl as Kline; else { st.klines.push(kl); if (st.klines.length > 120) st.klines.shift(); }
           st.price = kl.c;
         } else if (stream.includes("@depth")) {
-          st.bids = data.bids.map((x: string[]) => [+x[0], +x[1]]);
-          st.asks = data.asks.map((x: string[]) => [+x[0], +x[1]]);
+          st.bids = data.bids.map((x: string[]) => [+x[0]!, +x[1]!]);
+          st.asks = data.asks.map((x: string[]) => [+x[0]!, +x[1]!]);
         } else {
           st.change24 = ((+data.c - +data.o) / +data.o) * 100;
         }

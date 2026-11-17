@@ -8,7 +8,7 @@ async function sign(secret: string, query: string) {
 }
 
 export const realKeysStatus = createServerFn({ method: "GET" }).handler(async () => {
-  return { configured: Boolean(process.env.BINANCE_API_KEY && process.env.BINANCE_API_SECRET) };
+  return { configured: Boolean(process.env["BINANCE_API_KEY"] && process.env["BINANCE_API_SECRET"]) };
 });
 
 type OrderInput = { symbol: string; side: "BUY" | "SELL"; quoteOrderQty?: number; quantity?: string };
@@ -22,8 +22,8 @@ export const placeRealOrder = createServerFn({ method: "POST" })
     return d;
   })
   .handler(async ({ data }) => {
-    const apiKey = process.env.BINANCE_API_KEY;
-    const secret = process.env.BINANCE_API_SECRET;
+    const apiKey = process.env["BINANCE_API_KEY"];
+    const secret = process.env["BINANCE_API_SECRET"];
     if (!apiKey || !secret) return { ok: false as const, error: "Chaves da Binance não configuradas no backend." };
     const params = new URLSearchParams({ symbol: data.symbol, side: data.side, type: "MARKET", timestamp: String(Date.now()), recvWindow: "5000" });
     if (data.side === "BUY") params.set("quoteOrderQty", data.quoteOrderQty!.toFixed(2));

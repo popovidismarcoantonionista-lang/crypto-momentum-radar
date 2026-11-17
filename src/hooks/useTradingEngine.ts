@@ -14,7 +14,7 @@ export type Position = {
   sizeBrl: number; score: number; openedAt: number; realQty?: string;
 };
 export type Trade = { time: number; pair: string; source: Mode; entry: number; exit: number; score: number; fee: number; pnl: number; reason: string };
-export type Candidate = { id: string; label: string; source: Mode; price: number; change: number; score: number; reasons: Reason[]; safe: boolean; safeReason?: string; extra?: string };
+export type Candidate = { id: string; label: string; source: Mode; price: number; change: number; score: number; reasons: Reason[]; safe: boolean; safeReason?: string | undefined; extra?: string };
 export type Log = { t: number; kind: "scan" | "filter" | "buy" | "sell" | "warn" | "info"; msg: string };
 type Store = { balance: number; trades: Trade[]; day: string; dayStart: number; position: Position | null; halted: boolean; settings: Settings };
 

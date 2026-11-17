@@ -27,7 +27,7 @@ export function rsi(closes: number[], period = 7): number {
   if (closes.length < period + 1) return 50;
   let g = 0, l = 0;
   for (let i = closes.length - period; i < closes.length; i++) {
-    const d = closes[i] - closes[i - 1];
+    const d = closes[i]! - closes[i - 1]!;
     if (d > 0) g += d; else l -= d;
   }
   if (l === 0) return g === 0 ? 50 : 100;
