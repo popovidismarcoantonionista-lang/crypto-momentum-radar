@@ -28,3 +28,6 @@ use the editor.
   own key and store it in Secrets.
 - **Secrets.** Lovable manages them. Do not put secret values in the repo.
 <!-- LOVABLE:END -->
+
+- Gate.io access uses TanStack server functions and Web Crypto HMAC-SHA512, never ccxt or browser-side signed requests, so the same code runs in the Worker runtime without exposing credentials.
+- Trading rules live in pure, tested modules; the React engine only orchestrates market data, the single-position state machine, and order status.

@@ -81,8 +81,8 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Momentum Scalping Bot" },
-      { name: "description", content: "Robô de scalping cripto com dados ao vivo da Binance e DexScreener." },
+      { title: "IA Jev Trading Bot" },
+      { name: "description", content: "Trading automatizado na Gate.io com IA Jev, gestão de risco e radar de memecoins." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
       { name: "twitter:site", content: "@Lovable" },

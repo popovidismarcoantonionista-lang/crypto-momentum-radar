@@ -1,18 +1,20 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
-import { Activity, Bot, Crosshair, Flame, KeyRound, Play, Radar, RotateCcw, ShieldAlert, ShieldCheck, Square, Terminal, Wifi, WifiOff, History } from "lucide-react";
-import { useTradingEngine, fmtP } from "@/hooks/useTradingEngine";
+import { Activity, Bot, BrainCircuit, CircleDollarSign, Crosshair, Flame, Gauge as GaugeIcon, History, KeyRound, Pause, Play, Radar, RotateCcw, Settings2, ShieldAlert, ShieldCheck, SquareArrowOutUpRight, Terminal, Wifi, WifiOff } from "lucide-react";
+import { fmtP, useTradingEngine } from "@/hooks/useTradingEngine";
 import { Card, CandleChart, Gauge, Reasons } from "@/components/bot/Widgets";
-import { CEX_RISK, DEX_RISK, DAILY_GOAL_PCT } from "@/lib/indicators";
-import { realKeysStatus } from "@/lib/binance.functions";
+import { SettingsModal } from "@/components/bot/SettingsModal";
+import { testGateConnection } from "@/lib/gateio.functions";
+import type { GateCredentials, GateOrder } from "@/lib/gateio";
+import { roundTripPnl } from "@/lib/jev";
 
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Momentum Scalping Bot — Dashboard Cripto Spot" },
-      { name: "description", content: "Robô de scalping com score de confiança ao vivo, radar de memecoins DEX/CEX e filtro anti-rug." },
-      { property: "og:title", content: "Momentum Scalping Bot" },
-      { property: "og:description", content: "Scalping cripto com dados ao vivo da Binance e DexScreener." },
+      { title: "IA Jev Trading Bot — Gate.io & Memecoins" },
+      { name: "description", content: "Robô automático IA Jev para Gate.io com scanner de memecoins, gestão de risco, trailing stop e radar DexScreener." },
+      { property: "og:title", content: "IA Jev Trading Bot" },
+      { property: "og:description", content: "Entrada e saída automática na Gate.io com certeza configurável e proteção anti-topo." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
     ],
@@ -20,205 +22,162 @@ export const Route = createFileRoute("/")({
   component: Dashboard,
 });
 
-const brl = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+const usdt = (value: number) => `${value.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 4 })} USDT`;
+const brl = (value: number) => value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
 function Dashboard() {
-  const e = useTradingEngine();
-  const goal = e.dayStart * DAILY_GOAL_PCT;
-  const progress = Math.max(0, Math.min(100, (e.dayPnl / goal) * 100));
-  const statusTone = e.status.startsWith("STOP") ? "bg-sell/15 text-sell border-sell/40" : e.status === "POSICIONADO" ? "bg-buy/15 text-buy border-buy/40" : e.status.startsWith("AGUARD") ? "bg-primary/15 text-primary border-primary/40" : "bg-muted text-muted-foreground border-border";
-  const risk = e.settings.mode === "DEX" ? DEX_RISK : CEX_RISK;
-  const cur = e.selected && e.position && e.selected.id === e.position.id ? e.selected.price : 0;
-  const openPnl = e.position && cur ? (cur / e.position.entry - 1) * 100 : 0;
+  const [credentials, setCredentials] = useState<GateCredentials | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [scannerTab, setScannerTab] = useState<"GATE" | "DEX">("GATE");
+  const engine = useTradingEngine(credentials);
+  const balance = engine.settings.real ? engine.realBalance : engine.paperBalance;
+  const goal = engine.dayStart * (engine.settings.dailyGoalPct / 100);
+  const goalProgress = Math.max(0, Math.min(100, goal > 0 ? (engine.dayPnl / goal) * 100 : 0));
+  const currentPrice = engine.position ? engine.candidates.find((candidate) => candidate.id === engine.position?.id)?.price ?? 0 : 0;
+  const openPnl = engine.position && currentPrice > 0 ? roundTripPnl(engine.position.sizeUsdt, engine.position.entry, currentPrice) : null;
+
+  const handleTest = async (keys: GateCredentials) => {
+    const result = await testGateConnection({ data: { credentials: keys } });
+    if (result.ok) {
+      setCredentials(keys);
+      engine.updateRealBalance(result.available);
+    } else setCredentials(null);
+    return result;
+  };
+
+  const statusTone = engine.status.startsWith("STOP") ? "border-sell/40 bg-sell/15 text-sell" : engine.status === "POSICIONADO" ? "border-buy/40 bg-buy/15 text-buy" : "border-primary/40 bg-primary/10 text-primary";
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <header className="sticky top-0 z-10 border-b border-border bg-background/90 backdrop-blur">
-        <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-4 px-4 py-3">
+      <header className="sticky top-0 z-30 border-b border-border bg-background/95 backdrop-blur">
+        <div className="mx-auto flex max-w-[1700px] flex-wrap items-center gap-3 px-4 py-3">
           <div className="flex items-center gap-3">
-            <div className="grid h-9 w-9 place-items-center rounded-md bg-primary text-primary-foreground"><Bot className="h-5 w-5" /></div>
-            <div>
-              <h1 className="text-base font-bold leading-tight">Momentum & Scalping Bot</h1>
-              <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                {e.connected ? <Wifi className="h-3 w-3 text-buy" /> : <WifiOff className="h-3 w-3 text-sell" />}
-                Binance WS · USDT/BRL <span className="num">{e.usdBrl.toFixed(3)}</span>
-                <span className={`rounded px-1.5 font-semibold ${e.settings.real ? "bg-sell text-destructive-foreground" : "bg-muted"}`}>{e.settings.real ? "REAL" : "PAPER"}</span>
-              </div>
-            </div>
+            <div className="relative grid h-10 w-10 place-items-center rounded-xl bg-primary text-primary-foreground"><BrainCircuit className="h-6 w-6" /><span className="absolute -right-1 -top-1 h-3 w-3 animate-pulse rounded-full border-2 border-background bg-buy" /></div>
+            <div><h1 className="text-base font-bold tracking-tight sm:text-lg">IA Jev <span className="text-primary">Trading Bot</span></h1><div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">{engine.connected ? <Wifi className="h-3 w-3 text-buy" /> : <WifiOff className="h-3 w-3 text-sell" />}Gate.io Spot · {engine.lastUpdate ? new Date(engine.lastUpdate).toLocaleTimeString("pt-BR") : "conectando"}</div></div>
           </div>
-          <span className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-bold tracking-wider ${statusTone}`}>
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current" />{e.status}
-          </span>
-          <div className="ml-auto flex flex-wrap items-center gap-5">
-            <div>
-              <div className="text-[10px] uppercase text-muted-foreground">Banca atual</div>
-              <div className="num text-lg font-bold">{brl(e.balance)}</div>
-              <div className="num text-[10px] text-muted-foreground">≈ {(e.balance / e.usdBrl).toFixed(2)} USDT</div>
-            </div>
-            <div className="w-56">
-              <div className="flex justify-between text-[10px] uppercase text-muted-foreground"><span>Meta diária</span><span className={`num ${e.dayPnl >= 0 ? "text-buy" : "text-sell"}`}>{e.dayPnl >= 0 ? "+" : ""}{brl(e.dayPnl)} / +{brl(goal)}</span></div>
-              <div className="mt-1 h-2 overflow-hidden rounded-full bg-muted"><div className="h-full bg-buy transition-all" style={{ width: `${progress}%` }} /></div>
-              <label className="mt-1 flex cursor-pointer items-center gap-1.5 text-[10px] text-muted-foreground">
-                <input type="checkbox" className="accent-[var(--buy)]" checked={e.settings.autoPause} onChange={(x) => e.updateSettings({ autoPause: x.target.checked })} />
-                Pausar robô ao atingir a meta
-              </label>
-            </div>
-            {e.running ? (
-              <button onClick={e.stop} className="flex items-center gap-2 rounded-md bg-sell px-5 py-2.5 text-sm font-bold text-destructive-foreground"><Square className="h-4 w-4" />Parar Robô</button>
-            ) : (
-              <button onClick={e.start} className="glow-buy flex items-center gap-2 rounded-md bg-buy px-5 py-2.5 text-sm font-bold text-primary-foreground"><Play className="h-4 w-4" />Iniciar Robô</button>
-            )}
+          <span className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-bold tracking-wide ${engine.settings.real ? "border-sell/50 bg-sell/15 text-sell" : "border-primary/40 bg-primary/10 text-primary"}`}><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current" />{engine.settings.real ? "AUTO-TRADE REAL ATIVO" : "MODO SIMULAÇÃO"}</span>
+          <div className="ml-auto flex items-center gap-2 sm:gap-4">
+            <div className="hidden text-right sm:block"><div className="text-[9px] uppercase tracking-wider text-muted-foreground">Saldo {engine.settings.real ? "real" : "simulado"}</div><div className="num text-sm font-bold">{usdt(balance)}</div><div className="num text-[10px] text-muted-foreground">≈ {brl(balance * engine.usdBrl)}</div></div>
+            <button onClick={() => setSettingsOpen(true)} className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2.5 text-xs font-semibold hover:bg-accent"><Settings2 className="h-4 w-4 text-primary" /><span className="hidden md:inline">Configurações & IA Jev</span></button>
+            {engine.running ? <button onClick={engine.stop} className="flex items-center gap-2 rounded-lg bg-sell px-3 py-2.5 text-xs font-bold text-destructive-foreground sm:px-4"><Pause className="h-4 w-4" />Pausar</button> : <button onClick={engine.start} className="glow-buy flex items-center gap-2 rounded-lg bg-buy px-3 py-2.5 text-xs font-bold text-primary-foreground sm:px-4"><Play className="h-4 w-4" />Ligar IA Jev</button>}
           </div>
         </div>
       </header>
 
-      <main className="mx-auto grid max-w-[1600px] gap-4 p-4 xl:grid-cols-[300px_1fr_340px]">
-        <div className="space-y-4">
-          <Card title="Configuração" icon={<Crosshair className="h-4 w-4 text-primary" />}>
-            <div className="space-y-4 text-xs">
-              <div className="grid grid-cols-2 gap-1 rounded-md bg-muted p-1">
-                {(["CEX", "DEX"] as const).map((m) => (
-                  <button key={m} onClick={() => e.updateSettings({ mode: m, lock: "AUTO" })} className={`rounded px-2 py-1.5 font-semibold ${e.settings.mode === m ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>{m === "CEX" ? "CEX Binance" : "Híbrido DEX"}</button>
-                ))}
-              </div>
-              <div>
-                <div className="mb-1 flex justify-between"><span>Gatilho de confiança</span><span className="num font-bold text-primary">{e.settings.trigger}%</span></div>
-                <input type="range" min={50} max={100} value={e.settings.trigger} onChange={(x) => e.updateSettings({ trigger: +x.target.value })} className="w-full accent-[var(--primary)]" />
-              </div>
-              <div className="grid grid-cols-2 gap-2 num text-[11px]">
-                <div className="rounded bg-muted p-2">TP <b className="text-buy">+{risk.tp}%</b></div>
-                <div className="rounded bg-muted p-2">SL <b className="text-sell">-{risk.sl}%</b></div>
-                <div className="col-span-2 rounded bg-muted p-2">Trailing: em +{risk.trailTrigger}% → stop +{risk.trailLock}%</div>
-                <div className="col-span-2 rounded bg-muted p-2">Stop diário: <b className="text-sell">-{brl(e.dayStart * 0.1)}</b> · 98% da banca</div>
-              </div>
-              <button onClick={() => confirm("Reiniciar banca simulada para R$ 100,00?") && e.reset()} className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground"><RotateCcw className="h-3 w-3" />Reiniciar simulação</button>
-            </div>
-          </Card>
+      <main className="mx-auto max-w-[1700px] space-y-4 p-3 sm:p-4">
+        <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <Metric label="Banca atual" value={usdt(balance)} detail={brl(balance * engine.usdBrl)} icon={<CircleDollarSign className="h-4 w-4 text-primary" />} />
+          <Metric label="Resultado do dia" value={`${engine.dayPnl >= 0 ? "+" : ""}${usdt(engine.dayPnl)}`} detail={`Meta +${usdt(goal)} · Stop -${engine.settings.dailyStopPct}%`} tone={engine.dayPnl >= 0 ? "buy" : "sell"} icon={<Activity className="h-4 w-4 text-primary" />} progress={goalProgress} />
+          <Metric label="Estado do motor" value={engine.status} detail={engine.cooldown > 0 ? "Nova entrada liberada após o resfriamento" : `Análises a cada ${engine.settings.intervalSeconds}s`} icon={<Bot className="h-4 w-4 text-primary" />} small />
+          <Metric label="Certeza / Limiar" value={`${engine.selected?.source === "GATE" ? engine.selected.score : 0}% / ${engine.settings.trigger}%`} detail={engine.selected?.source === "GATE" ? engine.selected.label : "Selecione um par Gate.io"} icon={<GaugeIcon className="h-4 w-4 text-primary" />} />
+        </section>
 
-          <Card title="Scanner" icon={<Activity className="h-4 w-4 text-primary" />} right={<button onClick={() => e.updateSettings({ lock: "AUTO" })} className={`rounded px-2 py-0.5 text-[10px] font-bold ${e.settings.lock === "AUTO" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>AUTO-CAÇADOR</button>}>
-            <ul className="-mx-2 space-y-0.5">
-              {e.candidates.filter((c) => c.source === "CEX").map((c) => (
-                <li key={c.id}>
-                  <button onClick={() => e.updateSettings({ lock: e.settings.lock === c.id ? "AUTO" : c.id })} className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-accent ${e.settings.lock === c.id ? "bg-accent ring-1 ring-primary" : ""}`}>
-                    <span className="flex-1 text-left font-semibold">{c.label.replace("USDT", "")}</span>
-                    <span className={`num w-14 text-right ${c.change >= 0 ? "text-buy" : "text-sell"}`}>{c.change.toFixed(1)}%</span>
-                    <span className="h-1.5 w-12 overflow-hidden rounded bg-muted"><span className="block h-full bg-primary" style={{ width: `${c.score}%` }} /></span>
-                    <span className={`num w-8 text-right font-bold ${c.score >= e.settings.trigger ? "text-buy" : ""}`}>{c.score}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </Card>
-          <RealMode real={e.settings.real} onToggle={(v) => e.updateSettings({ real: v })} />
-        </div>
+        {engine.marketError && <div className="rounded-lg border border-sell/30 bg-sell/10 px-4 py-2 text-xs text-sell">{engine.marketError}</div>}
+        {engine.settings.real && !credentials && <div className="flex items-center gap-2 rounded-lg border border-sell/30 bg-sell/10 px-4 py-3 text-xs text-sell"><KeyRound className="h-4 w-4" />Modo Real salvo, mas as chaves precisam ser reconectadas em Configurações antes de operar ou vender.</div>}
 
-        <div className="space-y-4 min-w-0">
-          <Card title={e.selected ? `${e.selected.label} · ${e.selected.source === "CEX" ? "1m" : "amostras 3–15s"}` : "Gráfico"} icon={<Flame className="h-4 w-4 text-primary" />}
-            right={e.selected && <span className="num text-sm font-bold">{fmtP(e.selected.price)}</span>}>
-            <CandleChart klines={e.klines} position={e.position && e.selected?.id === e.position.id ? e.position : null} />
-            {e.position && (
-              <div className="mt-3 flex flex-wrap items-center gap-4 rounded-md bg-muted px-3 py-2 text-xs num">
-                <span>Posição: <b>{e.position.label}</b></span><span>Entrada {fmtP(e.position.entry)}</span><span>Valor {brl(e.position.sizeBrl)}</span>
-                <span className={openPnl >= 0 ? "text-buy" : "text-sell"}>{openPnl.toFixed(2)}% ({brl(e.position.sizeBrl * openPnl / 100)})</span>
-                <button onClick={e.closeNow} className="ml-auto rounded bg-sell px-2 py-1 font-sans font-bold text-destructive-foreground">Vender agora</button>
+        <div className="grid items-start gap-4 xl:grid-cols-[310px_minmax(0,1fr)_340px]">
+          <div className="space-y-4 min-w-0">
+            <Card title="Scanner Global" icon={<Radar className="h-4 w-4 text-primary" />} right={<span className="num text-[10px] text-muted-foreground">{engine.settings.intervalSeconds}s</span>}>
+              <div className="mb-3 grid grid-cols-2 gap-1 rounded-lg bg-muted p-1">
+                <button onClick={() => setScannerTab("GATE")} className={`rounded-md px-2 py-2 text-xs font-bold ${scannerTab === "GATE" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>Gate.io + PEARL</button>
+                <button onClick={() => setScannerTab("DEX")} className={`rounded-md px-2 py-2 text-xs font-bold ${scannerTab === "DEX" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}>DexScreener</button>
               </div>
-            )}
-          </Card>
-          <Trades trades={e.trades} />
-          <LogTerminal logs={e.logs} />
-        </div>
-
-        <div className="space-y-4">
-          <Card title="Confiança da IA" icon={<Bot className="h-4 w-4 text-primary" />} right={<span className="text-[10px] text-muted-foreground">{e.selected?.label}</span>}>
-            <Gauge score={e.selected?.score ?? 0} trigger={e.settings.trigger} />
-            <div className="mt-2"><Reasons reasons={e.selected?.reasons ?? []} /></div>
-          </Card>
-          {e.settings.mode === "DEX" ? <DexRadar e={e} /> : (
-            <Card title="Radar Recém-Lançadas (DEX & CEX)" icon={<Radar className="h-4 w-4 text-primary" />}>
-              <p className="text-xs text-muted-foreground">Ative o modo <b>Híbrido DEX</b> para monitorar memecoins recém-lançadas em Solana e Base com filtro anti-rug.</p>
+              {scannerTab === "GATE" ? <GateScanner engine={engine} /> : <DexScanner engine={engine} />}
             </Card>
-          )}
+
+            <Card title="Proteções Automáticas" icon={<ShieldCheck className="h-4 w-4 text-primary" />}>
+              <div className="grid grid-cols-2 gap-2 text-[11px] num">
+                <div className="rounded-lg bg-muted p-3">Take Profit<b className="mt-1 block text-buy">+{engine.settings.tp}%</b></div>
+                <div className="rounded-lg bg-muted p-3">Stop Loss<b className="mt-1 block text-sell">-{engine.settings.sl}%</b></div>
+                <div className="rounded-lg bg-muted p-3">Trailing ativa<b className="mt-1 block text-buy">+{engine.settings.trailTrigger}%</b></div>
+                <div className="rounded-lg bg-muted p-3">Distância do pico<b className="mt-1 block text-primary">{engine.settings.trailDistance}%</b></div>
+              </div>
+              <ul className="mt-3 space-y-2 text-[11px] text-muted-foreground"><li>• Filtro anti-topo acima de +15% em 15m</li><li>• Pullback exigido: 1,5%–2,5% com volume</li><li>• Taxa de 0,2% descontada do resultado</li><li>• Cooldown de 60s após cada saída</li></ul>
+              <button onClick={() => window.confirm("Reiniciar apenas a banca e o histórico da simulação?") && engine.reset()} className="mt-4 flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"><RotateCcw className="h-3 w-3" />Reiniciar simulação</button>
+            </Card>
+          </div>
+
+          <div className="space-y-4 min-w-0">
+            <OpenPosition engine={engine} currentPrice={currentPrice} pnl={openPnl} />
+            <Card title={engine.selected ? `${engine.selected.label} · ${engine.selected.source === "GATE" ? "velas 1m" : "amostras DEX"}` : "Gráfico ao vivo"} icon={<Flame className="h-4 w-4 text-primary" />} right={engine.selected && <span className="num text-sm font-bold">{fmtP(engine.selected.price)}</span>}>
+              <CandleChart klines={engine.klines} position={engine.position && engine.selected?.id === engine.position.id ? engine.position : null} />
+            </Card>
+            <OrderStatus order={engine.order} real={engine.settings.real} />
+            <Trades trades={engine.trades} usdBrl={engine.usdBrl} />
+            <LogTerminal logs={engine.logs} />
+          </div>
+
+          <div className="space-y-4 min-w-0">
+            <Card title="Painel da IA Jev" icon={<BrainCircuit className="h-4 w-4 text-primary" />} right={<span className="max-w-32 truncate text-[10px] text-muted-foreground">{engine.selected?.label}</span>}>
+              <Gauge score={engine.selected?.score ?? 0} trigger={engine.settings.trigger} />
+              {engine.selected && !engine.selected.safe && <p className="mb-3 flex gap-2 rounded-lg border border-sell/30 bg-sell/10 p-2 text-[11px] leading-relaxed text-sell"><ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />{engine.selected.safeReason}</p>}
+              <Reasons reasons={engine.selected?.reasons ?? []} />
+              <div className="mt-4 rounded-lg border border-border bg-muted/50 p-3 text-[11px] leading-relaxed text-muted-foreground">A compra só é liberada quando a certeza atinge <b className="text-foreground">{engine.settings.trigger}%</b>, o par passa no anti-topo e o volume 24h supera $100 mil.</div>
+            </Card>
+            <Card title="Estado da Conexão" icon={<Activity className="h-4 w-4 text-primary" />}>
+              <div className="space-y-3 text-xs">
+                <div className="flex items-center justify-between"><span className="text-muted-foreground">Gate.io pública</span><span className={`flex items-center gap-1.5 font-semibold ${engine.connected ? "text-buy" : "text-sell"}`}>{engine.connected ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />}{engine.connected ? "ATUALIZANDO" : "DESCONECTADA"}</span></div>
+                <div className="flex items-center justify-between"><span className="text-muted-foreground">Conta real</span><span className={credentials ? "font-semibold text-buy" : "text-muted-foreground"}>{credentials ? "CHAVES NA SESSÃO" : "NÃO CONECTADA"}</span></div>
+                <div className="flex items-center justify-between"><span className="text-muted-foreground">USDT/BRL</span><span className="num">{engine.usdBrl.toFixed(3)}</span></div>
+                <button onClick={() => setSettingsOpen(true)} className="flex w-full items-center justify-center gap-2 rounded-lg border border-border bg-muted px-3 py-2.5 font-semibold hover:bg-accent"><KeyRound className="h-4 w-4 text-primary" />Configurar Gate.io</button>
+              </div>
+            </Card>
+          </div>
         </div>
+        <p className="pb-4 text-center text-[10px] leading-relaxed text-muted-foreground">Criptomoedas e memecoins envolvem risco elevado. A IA Jev automatiza regras, não garante lucro. Teste em simulação antes de ativar ordens reais.</p>
       </main>
+
+      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} settings={engine.settings} onSettings={engine.updateSettings} onTest={handleTest} realBalance={engine.realBalance} />
     </div>
   );
 }
 
-function DexRadar({ e }: { e: ReturnType<typeof useTradingEngine> }) {
-  const dex = e.candidates.filter((c) => c.source === "DEX");
-  return (
-    <Card title="Radar Recém-Lançadas (DEX & CEX)" icon={<Radar className="h-4 w-4 animate-pulse text-primary" />} right={<span className="num text-[10px] text-muted-foreground">{e.dexLastUpdate ? new Date(e.dexLastUpdate).toLocaleTimeString("pt-BR") : "..."} · 15s</span>}>
-      <ul className="-mx-2 max-h-[560px] space-y-1 overflow-y-auto">
-        {dex.length === 0 && <li className="px-2 text-xs text-muted-foreground">Buscando pares na DexScreener...</li>}
-        {dex.map((c) => (
-          <li key={c.id}>
-            <button onClick={() => e.updateSettings({ lock: e.settings.lock === c.id ? "AUTO" : c.id })} className={`w-full rounded px-2 py-1.5 text-left text-xs hover:bg-accent ${e.settings.lock === c.id ? "bg-accent ring-1 ring-primary" : ""} ${c.safe ? "" : "opacity-60"}`}>
-              <div className="flex items-center gap-2">
-                {c.safe ? <ShieldCheck className="h-3.5 w-3.5 text-buy" /> : <ShieldAlert className="h-3.5 w-3.5 text-sell" />}
-                <span className="flex-1 truncate font-semibold">{c.label}</span>
-                <span className={`num ${c.change >= 0 ? "text-buy" : "text-sell"}`}>{c.change.toFixed(1)}% 5m</span>
-                <span className={`num w-8 text-right font-bold ${c.score >= e.settings.trigger ? "text-buy" : ""}`}>{c.score}</span>
-              </div>
-              <div className="num mt-0.5 pl-5 text-[10px] text-muted-foreground">{c.safe ? c.extra : `Reprovado: ${c.safeReason}`}</div>
-            </button>
-          </li>
-        ))}
-      </ul>
-    </Card>
-  );
+function Metric({ label, value, detail, icon, tone = "", progress, small = false }: { label: string; value: string; detail: string; icon: React.ReactNode; tone?: string; progress?: number; small?: boolean }) {
+  return <div className="rounded-xl border border-border bg-card p-3 sm:p-4"><div className="mb-2 flex items-center justify-between text-[10px] uppercase tracking-wider text-muted-foreground"><span>{label}</span>{icon}</div><div className={`num font-bold ${small ? "text-[11px] sm:text-xs" : "text-sm sm:text-lg"} ${tone === "buy" ? "text-buy" : tone === "sell" ? "text-sell" : ""}`}>{value}</div><div className="mt-1 truncate text-[10px] text-muted-foreground">{detail}</div>{progress !== undefined && <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted"><div className="h-full bg-buy transition-all" style={{ width: `${progress}%` }} /></div>}</div>;
 }
 
-function Trades({ trades }: { trades: ReturnType<typeof useTradingEngine>["trades"] }) {
-  return (
-    <Card title="Histórico de Operações" icon={<History className="h-4 w-4 text-primary" />}>
-      <div className="max-h-64 overflow-auto">
-        <table className="w-full text-xs num">
-          <thead className="text-left text-[10px] uppercase text-muted-foreground"><tr>{["Hora", "Par", "Tipo", "Entrada", "Saída", "Score", "Taxa", "P/L líq."].map((h) => <th key={h} className="px-2 py-1 font-sans font-medium">{h}</th>)}</tr></thead>
-          <tbody>
-            {trades.length === 0 && <tr><td colSpan={8} className="px-2 py-4 text-center font-sans text-muted-foreground">Nenhuma operação ainda.</td></tr>}
-            {trades.map((t) => (
-              <tr key={t.time} className="border-t border-border">
-                <td className="px-2 py-1.5">{new Date(t.time).toLocaleTimeString("pt-BR")}</td>
-                <td className="px-2 font-sans font-semibold">{t.pair}</td>
-                <td className="px-2 font-sans">{t.reason}</td>
-                <td className="px-2">{fmtP(t.entry)}</td><td className="px-2">{fmtP(t.exit)}</td>
-                <td className="px-2">{t.score}%</td><td className="px-2">{brl(t.fee)}</td>
-                <td className={`px-2 font-bold ${t.pnl >= 0 ? "text-buy" : "text-sell"}`}>{brl(t.pnl)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </Card>
-  );
+function GateScanner({ engine }: { engine: ReturnType<typeof useTradingEngine> }) {
+  const pairs = engine.candidates.filter((candidate) => candidate.source === "GATE");
+  return <>
+    <button onClick={() => engine.updateSettings({ lock: "AUTO" })} className={`mb-2 w-full rounded-md px-2 py-1.5 text-[10px] font-bold ${engine.settings.lock === "AUTO" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>AUTO-CAÇADOR · TODOS OS PARES USDT</button>
+    <ul className="-mx-2 max-h-[540px] space-y-1 overflow-y-auto px-1">
+      {pairs.length === 0 && <li className="p-4 text-center text-xs text-muted-foreground">Varrendo todos os tickers USDT da Gate.io...</li>}
+      {pairs.map((candidate) => <li key={candidate.id}><button onClick={() => engine.updateSettings({ lock: engine.settings.lock === candidate.id ? "AUTO" : candidate.id })} className={`w-full rounded-lg px-2 py-2 text-left hover:bg-accent ${engine.settings.lock === candidate.id ? "bg-accent ring-1 ring-primary" : ""}`}><div className="flex items-center gap-2"><span className="flex-1 truncate text-xs font-semibold">{candidate.id === "PEARL_USDT" && <span className="mr-1 rounded bg-primary/15 px-1 text-[8px] text-primary">PRIORIDADE</span>}{candidate.label.replace("_USDT", "")}</span><span className={`num text-[10px] ${candidate.change >= 0 ? "text-buy" : "text-sell"}`}>{candidate.change >= 0 ? "+" : ""}{candidate.change.toFixed(1)}%</span><span className={`num w-8 text-right text-xs font-bold ${candidate.score >= engine.settings.trigger ? "text-buy" : ""}`}>{candidate.score}</span></div><div className="mt-1 flex items-center gap-2"><span className="h-1 flex-1 overflow-hidden rounded bg-muted"><span className={`block h-full ${candidate.safe ? "bg-primary" : "bg-sell"}`} style={{ width: `${candidate.score}%` }} /></span><span className="num text-[9px] text-muted-foreground">{candidate.extra}</span></div></button></li>)}
+    </ul>
+  </>;
+}
+
+function DexScanner({ engine }: { engine: ReturnType<typeof useTradingEngine> }) {
+  const pairs = engine.candidates.filter((candidate) => candidate.source === "DEX");
+  return <><p className="mb-2 text-[10px] text-muted-foreground">Solana e Base · atualização 15s · liquidez mínima $50k · somente monitoramento</p><ul className="-mx-2 max-h-[540px] space-y-1 overflow-y-auto">{pairs.length === 0 && <li className="p-4 text-center text-xs text-muted-foreground">Buscando lançamentos na DexScreener...</li>}{pairs.map((candidate) => <li key={candidate.id} className={`rounded-lg px-2 py-2 ${candidate.safe ? "" : "opacity-65"}`}><div className="flex items-center gap-2">{candidate.safe ? <ShieldCheck className="h-3.5 w-3.5 text-buy" /> : <ShieldAlert className="h-3.5 w-3.5 text-sell" />}<span className="flex-1 truncate text-xs font-semibold">{candidate.label}</span><span className={`num text-[10px] ${candidate.change >= 0 ? "text-buy" : "text-sell"}`}>{candidate.change.toFixed(1)}% 5m</span></div><div className="num mt-1 pl-5 text-[9px] text-muted-foreground">{candidate.safe ? candidate.extra : `Reprovado: ${candidate.safeReason}`}</div></li>)}</ul></>;
+}
+
+function OpenPosition({ engine, currentPrice, pnl }: { engine: ReturnType<typeof useTradingEngine>; currentPrice: number; pnl: { fee: number; pnl: number } | null }) {
+  const position = engine.position;
+  if (!position) return <Card title="Posição Aberta Agora" icon={<Crosshair className="h-4 w-4 text-primary" />} right={<span className="rounded-full bg-muted px-2 py-1 text-[9px] font-bold text-muted-foreground">SEM POSIÇÃO</span>}><div className="flex flex-col items-center justify-center gap-2 py-5 text-center"><Crosshair className="h-8 w-8 text-muted-foreground" /><p className="text-sm font-semibold">Aguardando uma entrada da IA Jev</p><p className="max-w-md text-xs text-muted-foreground">Ao atingir {engine.settings.trigger}% de certeza e passar nos filtros, a compra {engine.settings.real ? "real" : "simulada"} será enviada automaticamente.</p></div></Card>;
+  const progress = currentPrice > 0 ? Math.max(0, Math.min(100, ((currentPrice - position.sl) / Math.max(position.tp - position.sl, Number.EPSILON)) * 100)) : 0;
+  return <Card title="Posição Aberta Agora" icon={<Crosshair className="h-4 w-4 text-buy" />} right={<span className="flex items-center gap-1.5 rounded-full bg-buy/15 px-2 py-1 text-[9px] font-bold text-buy"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-buy" />MONITORANDO TICK-A-TICK</span>}>
+    <div className="flex flex-wrap items-end justify-between gap-3"><div><div className="text-xl font-bold">{position.label}</div><div className="text-[10px] text-muted-foreground">Aberta às {new Date(position.openedAt).toLocaleTimeString("pt-BR")} · IA {position.score}%</div></div><div className={`num text-xl font-bold ${pnl && pnl.pnl >= 0 ? "text-buy" : "text-sell"}`}>{pnl ? `${pnl.pnl >= 0 ? "+" : ""}${usdt(pnl.pnl)}` : "—"}</div></div>
+    <div className="mt-4 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4"><span className="text-muted-foreground">Entrada<b className="num mt-1 block text-foreground">{fmtP(position.entry)}</b></span><span className="text-muted-foreground">Preço ao vivo<b className="num mt-1 block text-foreground">{currentPrice ? fmtP(currentPrice) : "—"}</b></span><span className="text-muted-foreground">Capital<b className="num mt-1 block text-foreground">{usdt(position.sizeUsdt)}</b></span><span className="text-muted-foreground">P/L em reais<b className={`num mt-1 block ${pnl && pnl.pnl >= 0 ? "text-buy" : "text-sell"}`}>{pnl ? brl(pnl.pnl * engine.usdBrl) : "—"}</b></span></div>
+    <div className="mt-4"><div className="mb-1 flex justify-between text-[10px] num"><span className="text-sell">SL {fmtP(position.sl)}</span><span className="text-muted-foreground">{position.trailed ? "TRAILING ATIVO" : "STOP FIXO"}</span><span className="text-buy">TP {fmtP(position.tp)}</span></div><div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full bg-primary transition-all" style={{ width: `${progress}%` }} /></div></div>
+    <div className="mt-4 flex items-center justify-between gap-3"><span className="text-[10px] text-muted-foreground">Taxa estimada {pnl ? usdt(pnl.fee) : "—"} · Pico {fmtP(position.peak)}</span><button onClick={engine.closeNow} className="rounded-lg bg-sell px-4 py-2 text-xs font-bold text-destructive-foreground">Vender agora</button></div>
+  </Card>;
+}
+
+function OrderStatus({ order, real }: { order: GateOrder | null; real: boolean }) {
+  const tone = order?.status === "CLOSED / EXECUTADA" ? "text-buy" : order?.status === "ERRO" || order?.status === "CANCELLED" ? "text-sell" : "text-primary";
+  return <Card title="Status da Ordem na Corretora" icon={<SquareArrowOutUpRight className="h-4 w-4 text-primary" />} right={<span className={`text-[10px] font-bold ${order ? tone : "text-muted-foreground"}`}>{order?.status ?? (real ? "AGUARDANDO ORDEM" : "SEM ORDEM REAL")}</span>}>
+    {order ? <><div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4"><span className="text-muted-foreground">ID real da ordem<b className="num mt-1 block break-all text-foreground">{order.orderId}</b></span><span className="text-muted-foreground">Par / Lado<b className="mt-1 block text-foreground">{order.symbol} · {order.side.toUpperCase()}</b></span><span className="text-muted-foreground">Preço médio<b className="num mt-1 block text-foreground">{order.averagePrice ? fmtP(order.averagePrice) : "—"}</b></span><span className="text-muted-foreground">Taxa cobrada<b className="num mt-1 block text-foreground">{order.fee} {order.feeCurrency}</b></span></div>{order.error && <p className="mt-3 rounded-lg border border-sell/30 bg-sell/10 p-3 text-xs leading-relaxed text-sell">{order.error}</p>}</> : <p className="text-xs text-muted-foreground">O ID, status de execução, preço médio, taxa e eventual recusa da Gate.io aparecerão aqui.</p>}
+  </Card>;
+}
+
+function Trades({ trades, usdBrl }: { trades: ReturnType<typeof useTradingEngine>["trades"]; usdBrl: number }) {
+  return <Card title="Histórico de Operações" icon={<History className="h-4 w-4 text-primary" />}><div className="max-h-64 overflow-auto"><table className="w-full min-w-[680px] text-xs num"><thead className="text-left text-[10px] uppercase text-muted-foreground"><tr>{["Hora", "Par", "Modo", "Saída", "Entrada", "Preço saída", "Taxa", "P/L líquido"].map((heading) => <th key={heading} className="px-2 py-1 font-sans font-medium">{heading}</th>)}</tr></thead><tbody>{trades.length === 0 && <tr><td colSpan={8} className="px-2 py-5 text-center font-sans text-muted-foreground">Nenhuma operação encerrada ainda.</td></tr>}{trades.map((trade) => <tr key={trade.time} className="border-t border-border"><td className="px-2 py-2">{new Date(trade.time).toLocaleTimeString("pt-BR")}</td><td className="px-2 font-sans font-semibold">{trade.pair}</td><td className="px-2 font-sans">{trade.real ? "REAL" : "PAPER"}</td><td className="px-2 font-sans">{trade.reason}</td><td className="px-2">{fmtP(trade.entry)}</td><td className="px-2">{fmtP(trade.exit)}</td><td className="px-2">{trade.fee.toFixed(4)}</td><td className={`px-2 font-bold ${trade.pnl >= 0 ? "text-buy" : "text-sell"}`}>{trade.pnl >= 0 ? "+" : ""}{trade.pnl.toFixed(4)} USDT<div className="text-[9px] font-normal text-muted-foreground">{brl(trade.pnl * usdBrl)}</div></td></tr>)}</tbody></table></div></Card>;
 }
 
 function LogTerminal({ logs }: { logs: ReturnType<typeof useTradingEngine>["logs"] }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { ref.current?.scrollTo({ top: ref.current.scrollHeight }); }, [logs]);
   const tone = { scan: "text-muted-foreground", filter: "text-primary", buy: "text-buy", sell: "text-sell", warn: "text-sell", info: "text-foreground" } as const;
-  return (
-    <Card title="Terminal de Logs" icon={<Terminal className="h-4 w-4 text-primary" />}>
-      <div ref={ref} className="h-64 overflow-y-auto rounded bg-terminal p-3 font-mono text-[11px] leading-relaxed">
-        {logs.map((l, i) => <div key={i} className={tone[l.kind]}><span className="text-muted-foreground">{new Date(l.t).toLocaleTimeString("pt-BR")} </span>{l.msg}</div>)}
-      </div>
-    </Card>
-  );
-}
-
-function RealMode({ real, onToggle }: { real: boolean; onToggle: (v: boolean) => void }) {
-  const [configured, setConfigured] = useState<boolean | null>(null);
-  useEffect(() => { realKeysStatus().then((r) => setConfigured(r.configured)).catch(() => setConfigured(false)); }, []);
-  return (
-    <Card title="Modo Real (Binance)" icon={<KeyRound className="h-4 w-4 text-primary" />}>
-      <div className="space-y-2 text-xs">
-        <p className="text-muted-foreground">As chaves ficam somente no servidor (segredos <code>BINANCE_API_KEY</code> e <code>BINANCE_API_SECRET</code>) e as ordens são assinadas com HMAC-SHA256. Nunca digite suas chaves no navegador.</p>
-        <div className="flex items-center gap-2">Status: {configured === null ? "verificando..." : configured ? <span className="text-buy font-semibold">chaves configuradas</span> : <span className="text-sell font-semibold">não configuradas</span>}</div>
-        <button disabled={!configured} onClick={() => { if (real) onToggle(false); else if (confirm("ATENÇÃO: ordens REAIS serão enviadas à Binance (somente modo CEX). Continuar?")) onToggle(true); }}
-          className={`w-full rounded px-2 py-1.5 font-bold disabled:opacity-40 ${real ? "bg-sell text-destructive-foreground" : "bg-muted"}`}>
-          {real ? "Desativar modo real" : "Ativar modo real"}
-        </button>
-      </div>
-    </Card>
-  );
+  return <Card title="Terminal da IA Jev & Gate.io" icon={<Terminal className="h-4 w-4 text-primary" />} right={<span className="flex items-center gap-1 text-[9px] text-buy"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-buy" />AO VIVO</span>}><div ref={ref} className="h-64 overflow-y-auto rounded-lg bg-terminal p-3 font-mono text-[10px] leading-relaxed sm:text-[11px]">{logs.map((item, index) => <div key={`${item.t}-${index}`} className={tone[item.kind]}><span className="text-muted-foreground">{new Date(item.t).toLocaleTimeString("pt-BR")} </span>{item.msg}</div>)}</div></Card>;
 }

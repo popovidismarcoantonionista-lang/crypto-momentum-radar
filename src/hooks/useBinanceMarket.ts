@@ -52,7 +52,7 @@ export function useBinanceMarket() {
       ws.onclose = () => { setConnected(false); if (!closed) setTimeout(connect, 3000); };
       ws.onmessage = (ev) => {
         const { stream, data } = JSON.parse(ev.data);
-        const sym = String(stream).split("@")[0].toUpperCase();
+        const sym = (String(stream).split("@")[0] ?? "").toUpperCase();
         if (sym === "USDTBRL") { brl.current = +data.c; return; }
         const st: SymState = (market.current[sym] ??= { klines: [], bids: [], asks: [], price: 0, change24: 0 });
         if (stream.includes("@kline")) {
