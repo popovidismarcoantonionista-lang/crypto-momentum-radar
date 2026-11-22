@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import type { DexPair } from "@/lib/indicators";
+import type { DexSample, TokenIdentity } from "@/lib/leadlag";
 
 type Raw = {
   chainId: string; pairAddress: string; url: string; priceUsd?: string; pairCreatedAt?: number;
-  baseToken: { symbol: string; name: string }; quoteToken: { symbol: string };
+  baseToken: { symbol: string; name: string; address?: string }; quoteToken: { symbol: string };
   priceChange?: { m5?: number; h1?: number }; liquidity?: { usd?: number }; volume?: { m5?: number; h1?: number };
   txns?: { m5?: { buys: number; sells: number }; h1?: { buys: number; sells: number } };
 };
@@ -19,10 +20,15 @@ const API = "https://api.dexscreener.com/latest/dex";
 export function useDexRadar(enabled: boolean, tracked: string | null) {
   const pairs = useRef<DexPair[]>([]);
   const history = useRef<Record<string, number[]>>({});
+  const samples = useRef<Record<string, DexSample[]>>({});
+  const identities = useRef<Record<string, TokenIdentity>>({});
   const [version, setVersion] = useState(0);
   const [lastUpdate, setLastUpdate] = useState(0);
 
-  const push = (p: DexPair) => { const h = (history.current[p.id] ??= []); h.push(p.price); if (h.length > 120) h.shift(); };
+  const push = (p: DexPair) => {
+    const h = (history.current[p.id] ??= []); h.push(p.price); if (h.length > 120) h.shift();
+    const s = (samples.current[p.id] ??= []); s.push({ time: Date.now(), price: p.price, volume5m: p.vol5m }); if (s.length > 120) s.shift();
+  };
 
   useEffect(() => {
     if (!enabled) return;
@@ -33,7 +39,7 @@ export function useDexRadar(enabled: boolean, tracked: string | null) {
         const map = new Map<string, DexPair>();
         res.flatMap((r: { pairs?: Raw[] }) => r.pairs ?? [])
           .filter((r) => (r.chainId === "solana" || r.chainId === "base") && ["SOL", "WETH", "USDC"].includes(r.quoteToken.symbol))
-          .forEach((r) => { const p = toPair(r); if (p.price > 0) map.set(p.id, p); });
+          .forEach((r) => { const p = toPair(r); if (p.price > 0) { map.set(p.id, p); if (r.baseToken.address) identities.current[p.id] = { chain: r.chainId, address: r.baseToken.address }; } });
         pairs.current = [...map.values()].sort((a, b) => b.createdAt - a.createdAt).slice(0, 24);
         pairs.current.forEach(push);
         setLastUpdate(Date.now()); setVersion((v) => v + 1);
@@ -61,5 +67,5 @@ export function useDexRadar(enabled: boolean, tracked: string | null) {
     return () => clearInterval(id);
   }, [tracked]);
 
-  return { pairs, history, version, lastUpdate };
+  return { pairs, history, samples, identities, version, lastUpdate };
 }

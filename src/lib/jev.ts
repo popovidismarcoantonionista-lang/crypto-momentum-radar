@@ -1,4 +1,6 @@
 import type { Kline, Level, Reason } from "@/lib/indicators";
+import { DEFAULT_LATENCY_MS, prefilter, type PairRules } from "@/lib/paper";
+import type { TokenIdentity } from "@/lib/leadlag";
 
 export type JevWeights = { volume: number; rsi: number; breakout: number; book: number };
 export type JevSettings = {
@@ -6,6 +8,9 @@ export type JevSettings = {
   intervalSeconds: number;
   weights: JevWeights;
   allocation: number;
+  handMode: "percent" | "fixed";
+  fixedUsdt: number;
+  latencyMs: number;
   tp: number;
   sl: number;
   trailTrigger: number;
@@ -20,6 +25,9 @@ export const DEFAULT_JEV_SETTINGS: JevSettings = {
   intervalSeconds: 5,
   weights: { volume: 30, rsi: 20, breakout: 25, book: 25 },
   allocation: 1,
+  handMode: "percent",
+  fixedUsdt: 5,
+  latencyMs: DEFAULT_LATENCY_MS,
   tp: 4,
   sl: 2,
   trailTrigger: 1.8,
@@ -37,6 +45,9 @@ export type JevMarket = {
   klines: Kline[];
   bids: Level[];
   asks: Level[];
+  bookTime?: number;
+  rules?: PairRules;
+  identity?: TokenIdentity;
 };
 
 export type JevAnalysis = {
@@ -99,7 +110,9 @@ function rsi7(closes: number[]) {
   return 100 - 100 / (1 + gains / losses);
 }
 
-export function scoreJev(market: JevMarket, weights: JevWeights): JevAnalysis {
+export function scoreJev(market: JevMarket, weights: JevWeights, now = Date.now()): JevAnalysis {
+  const filter = prefilter(market, market.quoteVolume, now);
+  if (!filter.ok) return { score: 0, reasons: [], safe: false, safeReason: filter.reason, change5: 0, change15: 0, volumeRatio: 0 };
   const m = marketMetrics(market.klines);
   const totalWeight = Math.max(1, weights.volume + weights.rsi + weights.breakout + weights.book);
   const normalized = {
@@ -131,8 +144,8 @@ export function scoreJev(market: JevMarket, weights: JevWeights): JevAnalysis {
   return {
     score,
     reasons,
-    safe: antiTop.ok && market.quoteVolume >= 100_000,
-    safeReason: !antiTop.ok ? antiTop.reason : market.quoteVolume < 100_000 ? `volume 24h abaixo de $100k ($${Math.round(market.quoteVolume / 1000)}k)` : undefined,
+    safe: antiTop.ok,
+    safeReason: !antiTop.ok ? antiTop.reason : undefined,
     change5: m.change5,
     change15: m.change15,
     volumeRatio: m.volumeRatio,
@@ -162,7 +175,7 @@ export function evaluateJevExit(position: JevOpenPosition, price: number, settin
 export const COOLDOWN_MS = 60_000;
 export const cooldownRemaining = (cooldownUntil: number, now: number) => Math.max(0, Math.ceil((cooldownUntil - now) / 1000));
 export const roundTripPnl = (sizeUsdt: number, entry: number, exit: number) => {
-  const fee = sizeUsdt * 0.002;
+  const fee = sizeUsdt * 0.001 + sizeUsdt * (exit / entry) * 0.001;
   return { fee, pnl: sizeUsdt * (exit / entry - 1) - fee };
 };
 
