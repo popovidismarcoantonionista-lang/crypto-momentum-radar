@@ -1,5 +1,7 @@
 # IA Jev — tarefas
 
+- [ ] Refinar paper trading, filtros, Lead-Lag, risco e painel conforme os arquivos enviados — aguardando aprovação do plano.
+
 - [ ] Substituir o painel Binance pela IA Jev com Gate.io e PEARL_USDT prioritário.
 - [ ] Criar scanner global Gate.io, indicadores configuráveis e radar DexScreener.
 - [ ] Implementar entrada, saída, trailing por pico e cooldown de 60 segundos com trava única.
