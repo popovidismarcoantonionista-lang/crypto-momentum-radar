@@ -125,6 +125,7 @@ function Dashboard() {
         </div>
         <Trades trades={engine.trades} />
         <PerformanceCard metrics={engine.metrics} />
+        <IntegrationCard engine={engine} />
         <p className="pb-4 text-center text-[10px] leading-relaxed text-muted-foreground">Criptomoedas e memecoins envolvem risco elevado. A IA Jev automatiza regras, não garante lucro. Teste em simulação antes de ativar ordens reais.</p>
       </main>
 
@@ -203,6 +204,33 @@ function Trades({ trades }: { trades: ReturnType<typeof useTradingEngine>["trade
 
 
 
+
+
+function IntegrationCard({ engine }: { engine: ReturnType<typeof useTradingEngine> }) {
+  const download = (name: string, data: unknown) => {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = name; a.click();
+    URL.revokeObjectURL(url);
+  };
+  const exportTrades = () => download(`ia-jev-trades-${Date.now()}.json`, { exportedAt: Date.now(), settings: engine.settings, trades: engine.trades, metrics: engine.metrics });
+  const exportSignals = () => download(`ia-jev-signals-${Date.now()}.json`, { exportedAt: Date.now(), candidates: engine.candidates, positions: engine.positions, status: engine.status });
+  const copyBridge = async (path: string) => {
+    const url = `${window.location.origin}${path}`;
+    await navigator.clipboard?.writeText(url);
+    alert(`Copiado: ${url}`);
+  };
+  return <Card title="Integrações & Exportação" icon={<SquareArrowOutUpRight className="h-4 w-4 text-primary" />}>
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-xs">
+      <button onClick={exportTrades} className="rounded-lg border border-border bg-muted px-3 py-3 font-semibold hover:bg-accent">Exportar trades JSON</button>
+      <button onClick={exportSignals} className="rounded-lg border border-border bg-muted px-3 py-3 font-semibold hover:bg-accent">Exportar sinais/estado JSON</button>
+      <button onClick={() => copyBridge("/api/bridge/status")} className="rounded-lg border border-border bg-muted px-3 py-3 font-semibold hover:bg-accent">Copiar URL Bridge Status</button>
+      <button onClick={() => copyBridge("/api/bridge/signal")} className="rounded-lg border border-border bg-muted px-3 py-3 font-semibold hover:bg-accent">Copiar URL Bridge Signal</button>
+    </div>
+    <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">Bridge HTTP: <span className="font-mono">POST /api/bridge/signal</span> recebe sinais externos {"{symbol,action,score,source,reason}"} (use <span className="font-mono">JEV_BRIDGE_TOKEN</span> no servidor e header <span className="font-mono">x-bridge-token</span>). <span className="font-mono">GET /api/bridge/signals?consume=1</span> lista sinais pendentes. Exporte JSON para análise no Freqtrade/Jesse/Qlib.</p>
+  </Card>;
+}
 function PerformanceCard({ metrics }: { metrics: ReturnType<typeof useTradingEngine>["metrics"] }) {
   const pf = metrics.profitFactor == null ? "—" : metrics.profitFactor === Infinity ? "∞" : metrics.profitFactor.toFixed(2);
   const wr = metrics.winRate == null ? "—" : `${metrics.winRate.toFixed(1)}%`;

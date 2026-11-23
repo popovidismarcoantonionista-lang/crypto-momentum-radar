@@ -258,6 +258,20 @@ export function useTradingEngine(credentials: GateCredentials | null) {
     const interval = setInterval(async () => { const response = await getGateOrder({ data: { credentials, symbol: order.symbol, orderId: order.orderId } }); if (response.ok) setOrder(response.order); }, 3000);
     return () => clearInterval(interval);
   }, [credentials, order]);
+  useEffect(() => {
+    let active = true;
+    const poll = async () => {
+      try {
+        const res = await fetch("/api/bridge/signals?consume=1", { cache: "no-store" });
+        if (!res.ok || !active) return;
+        const data = await res.json() as { ok?: boolean; signals?: { id: string; source: string; symbol: string; action: string; score?: number; reason?: string }[] };
+        for (const s of data.signals ?? []) log("info", `[BRIDGE ${s.source}] ${s.action.toUpperCase()} ${s.symbol}${s.score != null ? ` score ${s.score}` : ""}${s.reason ? ` — ${s.reason}` : ""}`);
+      } catch { /* bridge optional */ }
+    };
+    void poll();
+    const id = setInterval(poll, 15000);
+    return () => { active = false; clearInterval(id); };
+  }, [log]);
   const state = store.current, ledger = state.settings.real ? state.live : state.paper;
   const selectedId = ledger.positions[0]?.id ?? (state.settings.lock !== "AUTO" ? state.settings.lock : "PEARL_USDT");
   const selected = candidates.find((c) => c.id === selectedId) ?? candidates.find((c) => c.source === "GATE") ?? null;
