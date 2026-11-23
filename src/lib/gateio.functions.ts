@@ -1,14 +1,17 @@
 import { createServerFn } from "@tanstack/react-start";
 import type { Kline, Level } from "@/lib/indicators";
-import type { GateBalanceResult, GateCredentials, GateMarketResponse, GateOrder, GateOrderResult, GateOrderStatus } from "@/lib/gateio";
+import type { GateBalanceResult, GateBookSnapshot, GateCredentials, GateMarketResponse, GateOrder, GateOrderResult, GateOrderStatus, GatePairRule } from "@/lib/gateio";
 
 const HOST = "https://api.gateio.ws";
 const PREFIX = "/api/v4";
 const MEMES = ["PEPE", "DOGE", "SHIB", "WIF", "BONK", "FLOKI", "BOME", "MEW", "POPCAT", "TURBO", "NEIRO", "PNUT", "MOODENG", "GOAT", "ACT", "CHILLGUY"];
 const encoder = new TextEncoder();
+const rulesCache = new Map<string, { rule: GatePairRule; fetchedAt: number }>();
+let allRulesFetchedAt = 0;
 
-type Ticker = { currency_pair: string; last: string; change_percentage: string; quote_volume: string };
+type Ticker = { currency_pair: string; last: string; change_percentage: string; quote_volume: string; highest_bid?: string; lowest_ask?: string };
 type GateError = { label?: string; message?: string };
+type CurrencyPair = { id: string; quote: string; base: string; amount_precision?: number; precision?: number; min_quote_amount?: string; min_base_amount?: string; trade_status?: string };
 
 async function parseResponse<T>(response: Response): Promise<T> {
   const body = (await response.json().catch(() => ({}))) as T & GateError;
@@ -71,17 +74,54 @@ function validSymbol(symbol: string) {
   return symbol;
 }
 
+function normalizeRule(pair: CurrencyPair): GatePairRule {
+  return {
+    minQuote: Math.max(0, Number(pair.min_quote_amount ?? 0)),
+    minBase: Math.max(0, Number(pair.min_base_amount ?? 0)),
+    amountPrecision: Number.isInteger(pair.amount_precision) ? Math.max(0, Number(pair.amount_precision)) : 8,
+    pricePrecision: Number.isInteger(pair.precision) ? Math.max(0, Number(pair.precision)) : 8,
+    tradable: pair.trade_status === "tradable",
+  };
+}
+
+async function loadRules(symbols?: string[]) {
+  const now = Date.now();
+  const needsAll = now - allRulesFetchedAt > 3_600_000;
+  const missing = (symbols ?? []).filter((s) => !rulesCache.has(s) || now - (rulesCache.get(s)?.fetchedAt ?? 0) > 3_600_000);
+  if (needsAll && !symbols) {
+    const pairs = await publicGet<CurrencyPair[]>("/spot/currency_pairs");
+    for (const pair of pairs) if (pair.id.endsWith("_USDT")) rulesCache.set(pair.id, { rule: normalizeRule(pair), fetchedAt: now });
+    allRulesFetchedAt = now;
+  } else if (missing.length) {
+    if (missing.length > 20 || needsAll) {
+      const pairs = await publicGet<CurrencyPair[]>("/spot/currency_pairs");
+      for (const pair of pairs) if (pair.id.endsWith("_USDT")) rulesCache.set(pair.id, { rule: normalizeRule(pair), fetchedAt: now });
+      allRulesFetchedAt = now;
+    } else {
+      await Promise.all(missing.map(async (symbol) => {
+        try {
+          const pair = await publicGet<CurrencyPair>(`/spot/currency_pairs/${symbol}`);
+          rulesCache.set(symbol, { rule: normalizeRule(pair), fetchedAt: now });
+        } catch { /* keep missing */ }
+      }));
+    }
+  }
+  return rulesCache;
+}
+
 export const getGateMarket = createServerFn({ method: "GET" }).handler(async (): Promise<GateMarketResponse> => {
   const [tickers, brlResult] = await Promise.all([
     publicGet<Ticker[]>("/spot/tickers"),
     fetch("https://api.binance.com/api/v3/ticker/price?symbol=USDTBRL").then((r) => r.json()).then((r: { price?: string }) => Number(r.price) || 5.88).catch(() => 5.88),
   ]);
   const available = new Map(tickers.map((ticker) => [ticker.currency_pair, ticker]));
-  const liquidUsdt = tickers.filter((ticker) => ticker.currency_pair.endsWith("_USDT") && Number(ticker.quote_volume) >= 100_000 && !/(3L|3S|5L|5S)_USDT$/.test(ticker.currency_pair));
+  const liquidUsdt = tickers.filter((ticker) => ticker.currency_pair.endsWith("_USDT") && Number(ticker.quote_volume) >= 300_000 && !/(3L|3S|5L|5S)_USDT$/.test(ticker.currency_pair));
   const memeSymbols = MEMES.map((base) => `${base}_USDT`).filter((symbol) => available.has(symbol)).sort((a, b) => Number(available.get(b)!.quote_volume) - Number(available.get(a)!.quote_volume));
-  const movers = liquidUsdt.filter((ticker) => Number(ticker.change_percentage) >= 5).sort((a, b) => Number(b.change_percentage) - Number(a.change_percentage)).slice(0, 8).map((ticker) => ticker.currency_pair);
-  const active = [...liquidUsdt].sort((a, b) => Math.abs(Number(b.change_percentage)) * Math.log10(Number(b.quote_volume) + 10) - Math.abs(Number(a.change_percentage)) * Math.log10(Number(a.quote_volume) + 10)).slice(0, 5).map((ticker) => ticker.currency_pair);
-  const symbols = [...new Set(["PEARL_USDT", ...memeSymbols, ...movers, ...active])].filter((symbol) => available.has(symbol)).slice(0, 24);
+  const movers = liquidUsdt.filter((ticker) => Math.abs(Number(ticker.change_percentage)) >= 5).sort((a, b) => Math.abs(Number(b.change_percentage)) - Math.abs(Number(a.change_percentage))).slice(0, 10).map((ticker) => ticker.currency_pair);
+  const active = [...liquidUsdt].sort((a, b) => Math.abs(Number(b.change_percentage)) * Math.log10(Number(b.quote_volume) + 10) - Math.abs(Number(a.change_percentage)) * Math.log10(Number(a.quote_volume) + 10)).slice(0, 8).map((ticker) => ticker.currency_pair);
+  const topVolume = [...liquidUsdt].sort((a, b) => Number(b.quote_volume) - Number(a.quote_volume)).slice(0, 12).map((ticker) => ticker.currency_pair);
+  const symbols = [...new Set(["PEARL_USDT", ...memeSymbols, ...movers, ...active, ...topVolume])].filter((symbol) => available.has(symbol)).slice(0, 30);
+  await loadRules(symbols);
   let failed = 0;
   const markets = await mapLimit(symbols, 6, async (symbol) => {
     try {
@@ -90,6 +130,7 @@ export const getGateMarket = createServerFn({ method: "GET" }).handler(async ():
         publicGet<{ bids: string[][]; asks: string[][] }>(`/spot/order_book?currency_pair=${symbol}&limit=10`),
       ]);
       const ticker = available.get(symbol)!;
+      const cached = rulesCache.get(symbol);
       return {
         symbol,
         price: Number(ticker.last),
@@ -98,15 +139,30 @@ export const getGateMarket = createServerFn({ method: "GET" }).handler(async ():
         klines: parseKlines(klines),
         bids: book.bids.map(([price, quantity]) => [Number(price), Number(quantity)] as Level),
         asks: book.asks.map(([price, quantity]) => [Number(price), Number(quantity)] as Level),
+        ...(cached ? { rules: { ...cached.rule, fetchedAt: cached.fetchedAt } } : {}),
       };
     } catch {
       failed += 1;
       const ticker = available.get(symbol)!;
-      return { symbol, price: Number(ticker.last), change24: Number(ticker.change_percentage), quoteVolume: Number(ticker.quote_volume), klines: [], bids: [], asks: [] };
+      const cached = rulesCache.get(symbol);
+      return { symbol, price: Number(ticker.last), change24: Number(ticker.change_percentage), quoteVolume: Number(ticker.quote_volume), klines: [], bids: [], asks: [], ...(cached ? { rules: { ...cached.rule, fetchedAt: cached.fetchedAt } } : {}) };
     }
   });
   markets.sort((a, b) => a.symbol === "PEARL_USDT" ? -1 : b.symbol === "PEARL_USDT" ? 1 : b.quoteVolume - a.quoteVolume);
   return { markets, usdBrl: brlResult, fetchedAt: Date.now(), failed };
+});
+
+export const getGateBookSnapshot = createServerFn({ method: "GET" }).inputValidator((symbol: string) => validSymbol(symbol)).handler(async ({ data }): Promise<GateBookSnapshot> => {
+  await loadRules([data]);
+  const book = await publicGet<{ bids: string[][]; asks: string[][] }>(`/spot/order_book?currency_pair=${data}&limit=20`);
+  const cached = rulesCache.get(data);
+  return {
+    symbol: data,
+    bids: book.bids.map(([price, quantity]) => [Number(price), Number(quantity)] as [number, number]),
+    asks: book.asks.map(([price, quantity]) => [Number(price), Number(quantity)] as [number, number]),
+    bookTime: Date.now(),
+    ...(cached ? { rules: { ...cached.rule, fetchedAt: cached.fetchedAt } } : {}),
+  };
 });
 
 export const getGateTicker = createServerFn({ method: "GET" }).inputValidator((symbol: string) => validSymbol(symbol)).handler(async ({ data }) => {

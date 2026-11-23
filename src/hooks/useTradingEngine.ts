@@ -2,17 +2,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useGateMarket } from "./useGateMarket";
 import { useGateEvents } from "./useGateEvents";
 import { useDexRadar } from "./useDexRadar";
-import { getGateMarket, getGateOrder, placeGateOrder } from "@/lib/gateio.functions";
+import { getGateBookSnapshot, getGateOrder, placeGateOrder } from "@/lib/gateio.functions";
 import type { GateCredentials, GateOrder } from "@/lib/gateio";
 import { safetyCheck, scoreDex, type Kline, type Reason } from "@/lib/indicators";
 import { COOLDOWN_MS, DEFAULT_JEV_SETTINGS, cooldownRemaining, evaluateJevExit, jevLevels, scoreJev, type JevSettings } from "@/lib/jev";
-import { afterLatency, buyPaper, sellPaper, paperPnl, prefilter, spreadOf, rewardCheck, nextLosses, haltReason, performance, type ExecutionRecord, type Check } from "@/lib/paper";
+import { afterLatency, buyPaper, sellPaper, paperPnl, prefilter, spreadOf, rewardCheck, nextLosses, haltReason, performance, type BlockStatus, type ExecutionRecord, type Check } from "@/lib/paper";
 import { leadLag } from "@/lib/leadlag";
 
 export type Settings = JevSettings & { real: boolean; lock: string };
 export type Position = { id: string; label: string; source: "GATE"; entry: number; tp: number; sl: number; peak: number; trailed: boolean; sizeUsdt: number; quantity: number; entryFee: number; score: number; reasons: Reason[]; openedAt: number; real: boolean; orderId?: string; pendingExit?: string };
 export type Trade = ExecutionRecord;
-export type Candidate = { id: string; label: string; source: "GATE" | "DEX"; price: number; change: number; score: number; reasons: Reason[]; safe: boolean; safeReason?: string | undefined; extra?: string; quoteVolume?: number; spread?: number | null; leadBonus?: number; leadAge?: number };
+export type Candidate = { id: string; label: string; source: "GATE" | "DEX"; price: number; change: number; score: number; reasons: Reason[]; safe: boolean; safeReason?: string | undefined; extra?: string; quoteVolume?: number; spread?: number | null; leadBonus?: number; leadAge?: number; blockedStatus?: BlockStatus; blockReason?: string };
 export type Log = { t: number; kind: "scan" | "filter" | "buy" | "sell" | "warn" | "info"; msg: string };
 type Ledger = { cash: number; day: string; dayStart: number; dayPnl: number; losses: number; halt: "meta" | "stop" | "perdas" | null; cooldownUntil: number; position: Position | null; records: ExecutionRecord[]; equity: number[]; maxEquity: number; maxDrawdown: number };
 type Store = { schema: 3; settings: Settings; paper: Ledger; live: Ledger; legacy: ExecutionRecord[]; legacyPosition: boolean };
@@ -76,10 +76,21 @@ export function useTradingEngine(credentials: GateCredentials | null) {
   }, [log, setRun]);
 
   const refreshBook = useCallback(async (symbol: string) => {
-    const response = await getGateMarket();
-    const item = response.markets.find((m) => m.symbol === symbol);
-    if (!item || !item.bids.length || !item.asks.length) throw new Error("Par sem livro atualizado no scanner; operação mantida sem execução.");
-    const updated = { ...item, bookTime: response.fetchedAt };
+    const snapshot = await getGateBookSnapshot({ data: symbol });
+    const previous = gate.market.current[symbol];
+    if (!snapshot.bids.length || !snapshot.asks.length) throw new Error("Par sem livro atualizado no scanner; operação mantida sem execução.");
+    const updated = {
+      symbol,
+      price: previous?.price ?? snapshot.bids[0]?.[0] ?? 0,
+      change24: previous?.change24 ?? 0,
+      quoteVolume: previous?.quoteVolume ?? 0,
+      klines: previous?.klines ?? [],
+      bids: snapshot.bids,
+      asks: snapshot.asks,
+      bookTime: snapshot.bookTime,
+      ...(snapshot.rules ? { rules: { ...snapshot.rules, fetchedAt: snapshot.bookTime } } : previous?.rules ? { rules: previous.rules } : {}),
+      ...(previous?.identity ? { identity: previous.identity } : {}),
+    };
     gate.market.current[symbol] = updated;
     return updated;
   }, [gate.market]);
@@ -135,19 +146,28 @@ export function useTradingEngine(credentials: GateCredentials | null) {
       const list: Candidate[] = [];
       for (const item of Object.values(gate.market.current)) {
         const filter = prefilter(item, item.quoteVolume, now);
+        const spread = spreadOf(item);
+        if (!filter.ok) {
+          list.push({ id: item.symbol, label: item.symbol, source: "GATE", price: item.price, change: item.change24, score: 0, reasons: [], safe: false, safeReason: filter.reason, quoteVolume: item.quoteVolume, spread, blockedStatus: filter.status, blockReason: filter.reason, extra: `Vol $${Math.round(item.quoteVolume / 1000)}k` });
+          if (runningRef.current) recordBlock(ledger, item.symbol, filter);
+          continue;
+        }
+        blocked.current.delete(`${store.current.settings.real}-${item.symbol}`);
         const analysis = scoreJev(item, settings.weights, now);
         let bonus = 0, age = 0;
         const latest = item.klines.at(-1), previous = item.klines.at(-2);
-        const gateChange = latest && previous ? (latest.c / previous.c - 1) * 100 : Infinity;
-        if (filter.ok && item.identity) for (const pair of dex.pairs.current) {
+        const gateChange = latest && previous && previous.c > 0 ? (latest.c / previous.c - 1) * 100 : Infinity;
+        const baseSymbol = item.symbol.replace(/_USDT$/, "");
+        for (const pair of dex.pairs.current) {
           const identity = dex.identities.current[pair.id];
           if (!identity || !safetyCheck(pair).ok) continue;
-          const signal = leadLag(dex.samples.current[pair.id] ?? [], item.identity, identity, gateChange, now);
+          const sameToken = item.identity ? (item.identity.chain === identity.chain && item.identity.address.toLowerCase() === identity.address.toLowerCase()) : pair.symbol.toUpperCase() === baseSymbol.toUpperCase();
+          if (!sameToken) continue;
+          const signal = leadLag(dex.samples.current[pair.id] ?? [], item.identity ?? { chain: identity.chain, address: `symbol:${baseSymbol.toUpperCase()}` }, { ...identity, address: item.identity ? identity.address : `symbol:${baseSymbol.toUpperCase()}` }, gateChange, now);
           if (signal.bonus > bonus) { bonus = signal.bonus; age = signal.age; }
         }
-        const reasons = bonus ? [...analysis.reasons, { ok: true, text: `Lead-Lag verificado: +${bonus} pts`, pts: bonus, max: 10 }] : analysis.reasons;
-        list.push({ id: item.symbol, label: item.symbol, source: "GATE", price: item.price, change: item.change24, score: Math.min(100, analysis.score + bonus), reasons, safe: analysis.safe, safeReason: analysis.safeReason, quoteVolume: item.quoteVolume, spread: spreadOf(item), leadBonus: bonus, leadAge: age });
-        if (!filter.ok && runningRef.current) recordBlock(ledger, item.symbol, filter);
+        const reasons = bonus ? [...analysis.reasons, { ok: true, text: `Lead-Lag Dex verificado: +${bonus} pts (Dex ${age < 15000 ? "recente" : "atualizado"})`, pts: bonus, max: 10 }] : analysis.reasons;
+        list.push({ id: item.symbol, label: item.symbol, source: "GATE", price: item.price, change: item.change24, score: Math.min(100, analysis.score + bonus), reasons, safe: analysis.safe, safeReason: analysis.safeReason, quoteVolume: item.quoteVolume, spread, leadBonus: bonus, leadAge: age, extra: `Vol $${Math.round(item.quoteVolume / 1000)}k` });
       }
       for (const pair of dex.pairs.current) { const safety = safetyCheck(pair); const analysis = scoreDex(pair, ledger.cash); list.push({ id: pair.id, label: `${pair.symbol}/${pair.chain === "solana" ? "SOL" : "BASE"}`, source: "DEX", price: pair.price, change: pair.ch5m, score: safety.ok ? analysis.score : 0, reasons: analysis.reasons, safe: safety.ok, safeReason: safety.reason, extra: `Liq $${Math.round(pair.liquidity / 1000)}k · Vol1h $${Math.round(pair.vol1h / 1000)}k` }); }
       list.sort((a, b) => a.id === "PEARL_USDT" ? -1 : b.id === "PEARL_USDT" ? 1 : b.score - a.score); setCandidates(list);

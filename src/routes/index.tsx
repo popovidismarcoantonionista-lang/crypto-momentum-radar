@@ -6,7 +6,7 @@ import { Card, CandleChart, Gauge, Reasons } from "@/components/bot/Widgets";
 import { SettingsModal } from "@/components/bot/SettingsModal";
 import { testGateConnection } from "@/lib/gateio.functions";
 import type { GateCredentials, GateOrder } from "@/lib/gateio";
-import { roundTripPnl } from "@/lib/jev";
+
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -33,8 +33,8 @@ function Dashboard() {
   const balance = engine.settings.real ? engine.realBalance : engine.paperBalance;
   const goal = engine.dayStart * (engine.settings.dailyGoalPct / 100);
   const goalProgress = Math.max(0, Math.min(100, goal > 0 ? (engine.dayPnl / goal) * 100 : 0));
-  const currentPrice = engine.position ? engine.candidates.find((candidate) => candidate.id === engine.position?.id)?.price ?? 0 : 0;
-  const openPnl = engine.position && currentPrice > 0 ? roundTripPnl(engine.position.sizeUsdt, engine.position.entry, currentPrice) : null;
+  const currentPrice = engine.currentPrice || (engine.position ? engine.candidates.find((candidate) => candidate.id === engine.position?.id)?.price ?? 0 : 0);
+  const openPnl = engine.openPnl;
 
   const handleTest = async (keys: GateCredentials) => {
     const result = await testGateConnection({ data: { credentials: keys } });
@@ -73,6 +73,7 @@ function Dashboard() {
         </section>
 
         {engine.marketError && <div className="rounded-lg border border-sell/30 bg-sell/10 px-4 py-2 text-xs text-sell">{engine.marketError}</div>}
+        {engine.halted && <div className="flex items-center gap-2 rounded-lg border border-sell/40 bg-sell/15 px-4 py-3 text-xs font-semibold text-sell"><ShieldAlert className="h-4 w-4" />Kill Switch ativo: {engine.halt === "meta" ? "Meta diária atingida" : engine.halt === "stop" ? "Stop diário atingido" : "3 perdas consecutivas"}. Motor pausado automaticamente; novas entradas bloqueadas.</div>}
         {engine.settings.real && !credentials && <div className="flex items-center gap-2 rounded-lg border border-sell/30 bg-sell/10 px-4 py-3 text-xs text-sell"><KeyRound className="h-4 w-4" />Modo Real salvo, mas as chaves precisam ser reconectadas em Configurações antes de operar ou vender.</div>}
 
         <div className="grid items-start gap-4 xl:grid-cols-[310px_minmax(0,1fr)_340px]">
@@ -103,7 +104,6 @@ function Dashboard() {
               <CandleChart klines={engine.klines} position={engine.position && engine.selected?.id === engine.position.id ? engine.position : null} />
             </Card>
             <OrderStatus order={engine.order} real={engine.settings.real} />
-            <Trades trades={engine.trades} usdBrl={engine.usdBrl} />
             <LogTerminal logs={engine.logs} />
           </div>
 
@@ -124,6 +124,8 @@ function Dashboard() {
             </Card>
           </div>
         </div>
+        <Trades trades={engine.trades} />
+        <PerformanceCard metrics={engine.metrics} />
         <p className="pb-4 text-center text-[10px] leading-relaxed text-muted-foreground">Criptomoedas e memecoins envolvem risco elevado. A IA Jev automatiza regras, não garante lucro. Teste em simulação antes de ativar ordens reais.</p>
       </main>
 
@@ -139,10 +141,26 @@ function Metric({ label, value, detail, icon, tone = "", progress, small = false
 function GateScanner({ engine }: { engine: ReturnType<typeof useTradingEngine> }) {
   const pairs = engine.candidates.filter((candidate) => candidate.source === "GATE");
   return <>
-    <button onClick={() => engine.updateSettings({ lock: "AUTO" })} className={`mb-2 w-full rounded-md px-2 py-1.5 text-[10px] font-bold ${engine.settings.lock === "AUTO" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>AUTO-CAÇADOR · TODOS OS PARES USDT</button>
+    <button onClick={() => engine.updateSettings({ lock: "AUTO" })} className={`mb-2 w-full rounded-md px-2 py-1.5 text-[10px] font-bold ${engine.settings.lock === "AUTO" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>AUTO-CAÇADOR — PARES USDT FILTRADOS</button>
+    <div className="mb-2 grid grid-cols-[1fr_auto_auto_auto] gap-2 px-2 text-[9px] uppercase tracking-wider text-muted-foreground"><span>Par</span><span>Vol 24h</span><span>Spread</span><span>Score</span></div>
     <ul className="-mx-2 max-h-[540px] space-y-1 overflow-y-auto px-1">
-      {pairs.length === 0 && <li className="p-4 text-center text-xs text-muted-foreground">Varrendo todos os tickers USDT da Gate.io...</li>}
-      {pairs.map((candidate) => <li key={candidate.id}><button onClick={() => engine.updateSettings({ lock: engine.settings.lock === candidate.id ? "AUTO" : candidate.id })} className={`w-full rounded-lg px-2 py-2 text-left hover:bg-accent ${engine.settings.lock === candidate.id ? "bg-accent ring-1 ring-primary" : ""}`}><div className="flex items-center gap-2"><span className="flex-1 truncate text-xs font-semibold">{candidate.id === "PEARL_USDT" && <span className="mr-1 rounded bg-primary/15 px-1 text-[8px] text-primary">PRIORIDADE</span>}{candidate.label.replace("_USDT", "")}</span><span className={`num text-[10px] ${candidate.change >= 0 ? "text-buy" : "text-sell"}`}>{candidate.change >= 0 ? "+" : ""}{candidate.change.toFixed(1)}%</span><span className={`num w-8 text-right text-xs font-bold ${candidate.score >= engine.settings.trigger ? "text-buy" : ""}`}>{candidate.score}</span></div><div className="mt-1 flex items-center gap-2"><span className="h-1 flex-1 overflow-hidden rounded bg-muted"><span className={`block h-full ${candidate.safe ? "bg-primary" : "bg-sell"}`} style={{ width: `${candidate.score}%` }} /></span><span className="num text-[9px] text-muted-foreground">{candidate.extra}</span></div></button></li>)}
+      {pairs.length === 0 && <li className="p-4 text-center text-xs text-muted-foreground">Varrendo pares USDT da Gate.io...</li>}
+      {pairs.map((candidate) => {
+        const blocked = Boolean(candidate.blockedStatus);
+        const spreadPct = candidate.spread == null ? null : candidate.spread * 100;
+        return <li key={candidate.id}><button onClick={() => engine.updateSettings({ lock: engine.settings.lock === candidate.id ? "AUTO" : candidate.id })} className={`w-full rounded-lg px-2 py-2 text-left hover:bg-accent ${engine.settings.lock === candidate.id ? "bg-accent ring-1 ring-primary" : ""} ${blocked ? "border border-sell/30 bg-sell/5" : ""}`}>
+          <div className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-2">
+            <span className="min-w-0 truncate text-xs font-semibold">{candidate.id === "PEARL_USDT" && <span className="mr-1 rounded bg-primary/15 px-1 text-[8px] text-primary">PRIORIDADE</span>}{candidate.label.replace("_USDT", "")}</span>
+            <span className={`num text-[10px] ${blocked && candidate.blockedStatus === "Bloqueada por Liquidez" ? "text-sell font-semibold" : "text-muted-foreground"}`}>${Math.round((candidate.quoteVolume ?? 0) / 1000)}k</span>
+            <span className={`num text-[10px] ${spreadPct != null && spreadPct > 0.15 ? "text-sell font-semibold" : "text-muted-foreground"}`}>{spreadPct == null ? "—" : `${spreadPct.toFixed(3)}%`}</span>
+            <span className={`num w-8 text-right text-xs font-bold ${blocked ? "text-sell" : candidate.score >= engine.settings.trigger ? "text-buy" : "text-foreground"}`}>{blocked ? "BLQ" : candidate.score}</span>
+          </div>
+          <div className="mt-1 flex items-center gap-2">
+            <span className="h-1 flex-1 overflow-hidden rounded bg-muted"><span className={`block h-full ${blocked ? "bg-sell" : candidate.safe ? "bg-primary" : "bg-sell"}`} style={{ width: `${blocked ? 100 : candidate.score}%` }} /></span>
+            <span className={`truncate text-[9px] ${blocked ? "text-sell" : "text-muted-foreground"}`}>{blocked ? candidate.blockReason : candidate.extra}</span>
+          </div>
+        </button></li>;
+      })}
     </ul>
   </>;
 }
@@ -171,10 +189,26 @@ function OrderStatus({ order, real }: { order: GateOrder | null; real: boolean }
   </Card>;
 }
 
-function Trades({ trades, usdBrl }: { trades: ReturnType<typeof useTradingEngine>["trades"]; usdBrl: number }) {
-  return <Card title="Histórico de Operações" icon={<History className="h-4 w-4 text-primary" />}><div className="max-h-64 overflow-auto"><table className="w-full min-w-[680px] text-xs num"><thead className="text-left text-[10px] uppercase text-muted-foreground"><tr>{["Hora", "Par", "Modo", "Saída", "Entrada", "Preço saída", "Taxa", "P/L líquido"].map((heading) => <th key={heading} className="px-2 py-1 font-sans font-medium">{heading}</th>)}</tr></thead><tbody>{trades.length === 0 && <tr><td colSpan={8} className="px-2 py-5 text-center font-sans text-muted-foreground">Nenhuma operação encerrada ainda.</td></tr>}{trades.map((trade) => <tr key={trade.time} className="border-t border-border"><td className="px-2 py-2">{new Date(trade.time).toLocaleTimeString("pt-BR")}</td><td className="px-2 font-sans font-semibold">{trade.pair}</td><td className="px-2 font-sans">{trade.real ? "REAL" : "PAPER"}</td><td className="px-2 font-sans">{trade.reason}</td><td className="px-2">{fmtP(trade.entry)}</td><td className="px-2">{fmtP(trade.exit)}</td><td className="px-2">{trade.fee.toFixed(4)}</td><td className={`px-2 font-bold ${trade.pnl >= 0 ? "text-buy" : "text-sell"}`}>{trade.pnl >= 0 ? "+" : ""}{trade.pnl.toFixed(4)} USDT<div className="text-[9px] font-normal text-muted-foreground">{brl(trade.pnl * usdBrl)}</div></td></tr>)}</tbody></table></div></Card>;
+function Trades({ trades }: { trades: ReturnType<typeof useTradingEngine>["trades"] }) {
+  const fmtReason = (reasons: { text: string; pts: number; max: number }[]) => reasons.length ? reasons.map((r) => `${r.text} (${r.pts}/${r.max})`).join(" • ") : "—";
+  return <Card title="Histórico de Operações" icon={<History className="h-4 w-4 text-primary" />}><div className="max-h-72 overflow-auto"><table className="w-full min-w-[980px] text-xs"><thead className="text-left text-[10px] uppercase text-muted-foreground"><tr>{["Horário", "Par", "Motivo da Entrada (indicadores IA Jev)", "Entrada / Saída", "Taxas", "PnL Bruto", "PnL Líquido ($)", "Status"].map((h) => <th key={h} className="px-2 py-1 font-medium">{h}</th>)}</tr></thead><tbody>{trades.length === 0 && <tr><td colSpan={8} className="px-2 py-5 text-center text-muted-foreground">Nenhuma operação registrada ainda.</td></tr>}{trades.map((trade) => { const blocked = trade.status !== "Executada"; return <tr key={trade.id} className="border-t border-border align-top"><td className="px-2 py-2 num whitespace-nowrap">{new Date(trade.time).toLocaleTimeString("pt-BR")}</td><td className="px-2 py-2 font-semibold whitespace-nowrap">{trade.pair}<div className="text-[9px] font-normal text-muted-foreground">{trade.mode}</div></td><td className="px-2 py-2 min-w-[260px] text-[11px] text-muted-foreground">{fmtReason(trade.reasons)}{trade.reason ? <div className="mt-1 text-[10px] text-foreground/80">{trade.reason}</div> : null}</td><td className="px-2 py-2 num whitespace-nowrap">{trade.entry != null ? fmtP(trade.entry) : "—"}{trade.exit != null ? <div className="text-muted-foreground">→ {fmtP(trade.exit)}</div> : null}</td><td className="px-2 py-2 num whitespace-nowrap">{trade.fee != null ? `${trade.fee.toFixed(4)} USDT` : "—"}{trade.entryFee != null || trade.exitFee != null ? <div className="text-[9px] text-muted-foreground">in { (trade.entryFee ?? 0).toFixed(4)} / out {(trade.exitFee ?? 0).toFixed(4)}</div> : null}</td><td className={`px-2 py-2 num whitespace-nowrap ${trade.gross != null ? trade.gross >= 0 ? "text-buy" : "text-sell" : "text-muted-foreground"}`}>{trade.gross != null ? `${trade.gross >= 0 ? "+" : ""}${trade.gross.toFixed(4)} USDT` : "—"}</td><td className={`px-2 py-2 num whitespace-nowrap font-bold ${trade.pnl != null ? trade.pnl >= 0 ? "text-buy" : "text-sell" : "text-muted-foreground"}`}>{trade.pnl != null ? `${trade.pnl >= 0 ? "+" : ""}${trade.pnl.toFixed(4)} USDT` : "—"}</td><td className="px-2 py-2"><span className={`inline-flex rounded-full px-2 py-1 text-[10px] font-bold ${blocked ? "bg-sell/15 text-sell" : "bg-buy/15 text-buy"}`}>{trade.status}</span></td></tr>; })}</tbody></table></div></Card>;
 }
 
+
+
+function PerformanceCard({ metrics }: { metrics: ReturnType<typeof useTradingEngine>["metrics"] }) {
+  const pf = metrics.profitFactor == null ? "—" : metrics.profitFactor === Infinity ? "∞" : metrics.profitFactor.toFixed(2);
+  const wr = metrics.winRate == null ? "—" : `${metrics.winRate.toFixed(1)}%`;
+  const dd = metrics.drawdown == null ? "—" : `${metrics.drawdown.toFixed(2)}%`;
+  return <Card title="Métricas de Performance" icon={<Activity className="h-4 w-4 text-primary" />}>
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 text-xs">
+      <div className="rounded-lg bg-muted p-3"><div className="text-muted-foreground">Win Rate</div><div className="num mt-1 text-lg font-bold text-buy">{wr}</div></div>
+      <div className="rounded-lg bg-muted p-3"><div className="text-muted-foreground">Total de Taxas Pagas</div><div className="num mt-1 text-lg font-bold text-primary">{metrics.fees.toFixed(4)} USDT</div></div>
+      <div className="rounded-lg bg-muted p-3"><div className="text-muted-foreground">Profit Factor</div><div className="num mt-1 text-lg font-bold">{pf}</div></div>
+      <div className="rounded-lg bg-muted p-3"><div className="text-muted-foreground">Drawdown Máximo</div><div className="num mt-1 text-lg font-bold text-sell">{dd}</div></div>
+    </div>
+  </Card>;
+}
 function LogTerminal({ logs }: { logs: ReturnType<typeof useTradingEngine>["logs"] }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { ref.current?.scrollTo({ top: ref.current.scrollHeight }); }, [logs]);

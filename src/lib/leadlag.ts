@@ -5,7 +5,12 @@ export function leadLag(samples: DexSample[], gate: TokenIdentity | undefined, d
   if (!gate || gate.chain !== dex.chain || gate.address.toLowerCase() !== dex.address.toLowerCase()) return none;
   const latest = samples.at(-1);
   if (!latest || latest.price <= 0 || now - latest.time > 20_000) return none;
-  const prior = samples.findLast((s) => s.time <= latest.time - 60_000 && s.time >= latest.time - 75_000);
+  let prior: DexSample | undefined;
+  for (let i = samples.length - 1; i >= 0; i -= 1) {
+    const s = samples[i]!;
+    if (s.time <= latest.time - 60_000 && s.time >= latest.time - 75_000) { prior = s; break; }
+    if (s.time < latest.time - 75_000) break;
+  }
   if (!prior || prior.price <= 0 || prior.volume5m <= 0) return none;
   const change = (latest.price / prior.price - 1) * 100;
   const volumeRatio = latest.volume5m / prior.volume5m;

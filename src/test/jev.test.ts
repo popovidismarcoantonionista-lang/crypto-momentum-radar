@@ -3,7 +3,7 @@ import { DEFAULT_JEV_SETTINGS, antiTopCheck, cooldownRemaining, evaluateJevExit,
 import type { Kline } from "@/lib/indicators";
 
 const candle = (close: number, volume = 100): Kline => ({ t: 0, o: close, h: close, l: close, c: close, v: volume });
-const market = (klines: Kline[]): JevMarket => ({ symbol: "PEARL_USDT", price: klines.at(-1)?.c ?? 1, change24: 8, quoteVolume: 200_000, klines, bids: [[1, 800]], asks: [[1.01, 200]] });
+const market = (klines: Kline[]): JevMarket => ({ symbol: "PEARL_USDT", price: klines.at(-1)?.c ?? 1, change24: 8, quoteVolume: 500_000, klines, bids: [[1, 800]], asks: [[1.001, 200]], bookTime: Date.now() });
 
 describe("IA Jev — parâmetros e proteções", () => {
   it("usa certeza 85%, análise de 5s e risco +4%/-2%", () => {

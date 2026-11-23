@@ -18,3 +18,5 @@ export type GateOrder = {
 };
 export type GateOrderResult = { ok: true; order: GateOrder } | { ok: false; error: string };
 export type GateBalanceResult = { ok: true; available: number; locked: number } | { ok: false; error: string };
+export type GatePairRule = { minQuote: number; minBase: number; amountPrecision: number; pricePrecision: number; tradable: boolean };
+export type GateBookSnapshot = { symbol: string; bids: [number, number][]; asks: [number, number][]; bookTime: number; rules?: GatePairRule & { fetchedAt: number } };

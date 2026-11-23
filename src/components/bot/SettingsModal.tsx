@@ -110,16 +110,24 @@ export function SettingsModal({ open, onClose, settings, onSettings, onTest, rea
 
           <section>
             <h3 className="mb-3 text-sm font-semibold">Gestão de Risco & Banca</h3>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-              <NumberField label="Capital por operação" value={Math.round(settings.allocation * 100)} suffix="%" step={1} min={1} onChange={(value) => onSettings({ allocation: Math.max(1, Math.min(100, value)) / 100 })} />
-              <NumberField label="Take Profit" value={settings.tp} suffix="%" min={0.1} onChange={(tp) => onSettings({ tp })} />
-              <NumberField label="Stop Loss" value={settings.sl} suffix="%" min={0.1} onChange={(sl) => onSettings({ sl })} />
-              <NumberField label="Ativação do Trailing" value={settings.trailTrigger} suffix="%" min={0.1} onChange={(trailTrigger) => onSettings({ trailTrigger })} />
-              <NumberField label="Distância do Trailing" value={settings.trailDistance} suffix="%" min={0.1} onChange={(trailDistance) => onSettings({ trailDistance })} />
-              <NumberField label="Meta diária" value={settings.dailyGoalPct} suffix="%" min={1} onChange={(dailyGoalPct) => onSettings({ dailyGoalPct })} />
+            <div className="mb-3 grid gap-2 sm:grid-cols-2">
+              <button onClick={() => onSettings({ handMode: "percent" })} className={`rounded-lg border p-3 text-left text-xs ${settings.handMode === "percent" ? "border-primary bg-primary/10" : "border-border bg-muted/50"}`}><span className="block font-bold">% da banca</span><span className="text-muted-foreground">Usa percentual do saldo disponível</span></button>
+              <button onClick={() => onSettings({ handMode: "fixed" })} className={`rounded-lg border p-3 text-left text-xs ${settings.handMode === "fixed" ? "border-primary bg-primary/10" : "border-border bg-muted/50"}`}><span className="block font-bold">Valor fixo USDT</span><span className="text-muted-foreground">Usa valor fixo por operação</span></button>
             </div>
-            <label className="mt-4 flex cursor-pointer items-center gap-2 text-xs"><input type="checkbox" checked={settings.autoPause} onChange={(event) => onSettings({ autoPause: event.target.checked })} className="accent-[var(--buy)]" />Pausar automaticamente ao atingir a meta diária</label>
-            <p className="mt-2 text-xs text-muted-foreground">Circuit breaker fixo de proteção: -{settings.dailyStopPct}% no dia. Uma operação por vez e cooldown obrigatório de 60 segundos.</p>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              {settings.handMode === "percent"
+                ? <NumberField label="Tamanho da mão" value={Math.round(settings.allocation * 100)} suffix="%" step={1} min={1} max={100} onChange={(value) => onSettings({ allocation: Math.max(1, Math.min(100, value)) / 100 })} />
+                : <NumberField label="Tamanho da mão" value={settings.fixedUsdt} suffix="USDT" step={0.5} min={1} max={100000} onChange={(fixedUsdt) => onSettings({ fixedUsdt: Math.max(1, fixedUsdt) })} />}
+              <NumberField label="Take Profit mínimo" value={settings.tp} suffix="%" min={0.1} step={0.1} onChange={(tp) => onSettings({ tp })} />
+              <NumberField label="Stop Loss técnico" value={settings.sl} suffix="%" min={0.1} step={0.1} onChange={(sl) => onSettings({ sl })} />
+              <NumberField label="Ativação do Trailing" value={settings.trailTrigger} suffix="%" min={0.1} step={0.1} onChange={(trailTrigger) => onSettings({ trailTrigger })} />
+              <NumberField label="Distância do Trailing" value={settings.trailDistance} suffix="%" min={0.1} step={0.1} onChange={(trailDistance) => onSettings({ trailDistance })} />
+              <NumberField label="Latência simulação" value={settings.latencyMs} suffix="ms" min={0} max={10000} step={50} onChange={(latencyMs) => onSettings({ latencyMs: Math.max(0, Math.min(10000, latencyMs)) })} />
+              <NumberField label="Meta diária" value={settings.dailyGoalPct} suffix="%" min={0.1} step={0.1} onChange={(dailyGoalPct) => onSettings({ dailyGoalPct })} />
+              <NumberField label="Stop diário" value={settings.dailyStopPct} suffix="%" min={0.1} step={0.1} onChange={(dailyStopPct) => onSettings({ dailyStopPct })} />
+            </div>
+            <p className="mt-4 rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs text-muted-foreground"><span className="font-semibold text-foreground">Kill Switch automático ativo:</span> pausa ao atingir meta diária, stop diário ou 3 perdas consecutivas.</p>
+            <p className="mt-2 text-xs text-muted-foreground">Trava R/R: a IA Jev só entra se o TP estimado for &gt;= 2,5x o custo total (taxas 0,20% + spread + slippage). Cooldown obrigatório de 60s após cada saída.</p>
           </section>
         </div>
         <footer className="sticky bottom-0 border-t border-border bg-card/95 px-5 py-3 backdrop-blur"><button onClick={onClose} className="w-full rounded-md bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground">Salvar e voltar ao painel</button></footer>
