@@ -10,7 +10,7 @@ import { afterLatency, buyPaper, sellPaper, paperPnl, prefilter, spreadOf, rewar
 import { leadLag } from "@/lib/leadlag";
 
 export type Settings = JevSettings & { real: boolean; lock: string };
-export type Position = { id: string; label: string; source: "GATE"; entry: number; tp: number; sl: number; peak: number; trailed: boolean; sizeUsdt: number; quantity: number; entryFee: number; score: number; reasons: Reason[]; openedAt: number; real: boolean; orderId?: string; pendingExit?: string };
+export type Position = { id: string; label: string; source: "GATE"; entry: number; tp: number; sl: number; peak: number; trailed: boolean; peakProfitPct?: number; sizeUsdt: number; quantity: number; entryFee: number; score: number; reasons: Reason[]; openedAt: number; real: boolean; orderId?: string; pendingExit?: string };
 export type Trade = ExecutionRecord;
 export type Candidate = { id: string; label: string; source: "GATE" | "DEX"; price: number; change: number; score: number; reasons: Reason[]; safe: boolean; safeReason?: string | undefined; extra?: string; quoteVolume?: number; spread?: number | null; leadBonus?: number; leadAge?: number; blockedStatus?: BlockStatus; blockReason?: string };
 export type Log = { t: number; kind: "scan" | "filter" | "buy" | "sell" | "warn" | "info"; msg: string };
@@ -205,8 +205,8 @@ export function useTradingEngine(credentials: GateCredentials | null) {
         if (!bid || !mkt?.bookTime || now - mkt.bookTime >= 10_000 || busy.current) continue;
         if (pos.pendingExit && !pos.real) { void closePosition(pos.id, pos.pendingExit); closedAny = true; break; }
         const decision = evaluateJevExit(pos, bid, settings);
-        pos.peak = decision.peak; pos.sl = decision.sl; pos.trailed = decision.trailed;
-        if (decision.action === "tp" || decision.action === "sl") { void closePosition(pos.id, decision.reason ?? "Stop Loss"); closedAny = true; break; }
+        pos.peak = decision.peak; pos.sl = decision.sl; pos.trailed = decision.trailed; pos.peakProfitPct = decision.peakProfitPct;
+        if (decision.action === "tp" || decision.action === "sl" || decision.action === "smart") { void closePosition(pos.id, decision.reason ?? "Stop Loss"); closedAny = true; break; }
       }
       if (ledger.positions.length > 0) setTick((v) => v + 1);
       if (closedAny) return;
@@ -289,8 +289,8 @@ export function useTradingEngine(credentials: GateCredentials | null) {
   const updateSettings = (patch: Partial<Settings>) => {
     if (busy.current || state.paper.positions.length || state.live.positions.length) { log("warn", "Ajustes bloqueados durante posições abertas ou execução; feche as operações primeiro."); return; }
     if (patch.real && !keys.current) { log("warn", "Conecte a Gate.io antes de selecionar dinheiro real."); return; }
-    const next = { ...state.settings, ...patch, intervalSeconds: 5, autoPause: true, maxPositions: Math.max(1, Math.min(10, Math.floor(Number(patch.maxPositions ?? state.settings.maxPositions ?? 3)))) };
-    if (![next.tp, next.sl, next.fixedUsdt, next.dailyGoalPct, next.dailyStopPct, next.trailTrigger, next.trailDistance, next.maxPositions].every((n) => Number.isFinite(n) && n > 0) || !Number.isFinite(next.latencyMs) || next.latencyMs < 0 || next.latencyMs > 10_000 || next.allocation <= 0 || next.allocation > 1) { log("warn", "Parâmetros inválidos; alteração não aplicada."); return; }
+    const next = { ...state.settings, ...patch, intervalSeconds: 5, autoPause: true, maxPositions: Math.max(1, Math.min(10, Math.floor(Number(patch.maxPositions ?? state.settings.maxPositions ?? 3)))), smartExitMinProfitPct: Math.max(0.1, Number(patch.smartExitMinProfitPct ?? state.settings.smartExitMinProfitPct ?? 1.2)), smartExitGivebackPct: Math.max(5, Math.min(90, Number(patch.smartExitGivebackPct ?? state.settings.smartExitGivebackPct ?? 35))) };
+    if (![next.tp, next.sl, next.fixedUsdt, next.dailyGoalPct, next.dailyStopPct, next.trailTrigger, next.trailDistance, next.maxPositions, next.smartExitMinProfitPct, next.smartExitGivebackPct].every((n) => Number.isFinite(n) && n > 0) || !Number.isFinite(next.latencyMs) || next.latencyMs < 0 || next.latencyMs > 10_000 || next.allocation <= 0 || next.allocation > 1) { log("warn", "Parâmetros inválidos; alteração não aplicada."); return; }
     state.settings = next; lastScan.current = ""; save();
   };
   return { settings: state.settings, positions: positionsView, position: positionsView[0] ?? null, paperBalance: state.settings.real ? state.paper.cash : equity, realBalance: state.settings.real ? equity : state.live.cash, cash: ledger.cash, dayStart: ledger.dayStart, dayPnl: ledger.dayPnl, trades: ledger.records, legacyTrades: state.legacy, legacyPosition: state.legacyPosition, halted: Boolean(ledger.halt), halt: ledger.halt, losses: ledger.losses, running, logs, candidates, selected, klines, status, order, openPnl: positionsView[0]?.pnl ?? null, currentPrice: positionsView[0]?.currentPrice ?? 0, metrics: { ...metrics, fees: metrics.fees + ledger.positions.reduce((s, p) => s + p.entryFee, 0), drawdown: ledger.equity.length > 1 ? ledger.maxDrawdown : null }, connected: gate.connected, eventConnected: events.connected, marketError: gate.error, lastUpdate: gate.lastUpdate, usdBrl: gate.usdBrl.current, dexLastUpdate: dex.lastUpdate, cooldown, metadataReady: Boolean(selected && gate.market.current[selected.id]?.rules), updateSettings,

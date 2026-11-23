@@ -127,6 +127,14 @@ export function SettingsModal({ open, onClose, settings, onSettings, onTest, rea
               <NumberField label="Stop diário" value={settings.dailyStopPct} suffix="%" min={0.1} step={0.1} onChange={(dailyStopPct) => onSettings({ dailyStopPct })} />
               <NumberField label="Máx. posições simultâneas" value={settings.maxPositions} suffix="" min={1} max={10} step={1} onChange={(maxPositions) => onSettings({ maxPositions: Math.max(1, Math.min(10, Math.floor(maxPositions))) })} />
             </div>
+            <div className="mt-4 rounded-lg border border-buy/20 bg-buy/5 p-3">
+              <label className="flex cursor-pointer items-center gap-2 text-xs font-semibold"><input type="checkbox" checked={settings.smartExitEnabled} onChange={(e) => onSettings({ smartExitEnabled: e.target.checked })} className="accent-[var(--buy)]" />Saída inteligente por lucro (dinâmica, não fixa)</label>
+              <p className="mt-1 text-[11px] text-muted-foreground">Quando o lucro líquido atinge o mínimo, o robô acompanha o pico e sai automaticamente se devolver parte do lucro.</p>
+              <div className="mt-3 grid grid-cols-2 gap-3">
+                <NumberField label="Lucro mínimo para ativar" value={settings.smartExitMinProfitPct} suffix="%" min={0.1} step={0.1} onChange={(smartExitMinProfitPct) => onSettings({ smartExitMinProfitPct })} />
+                <NumberField label="Devolução máxima do pico" value={settings.smartExitGivebackPct} suffix="%" min={5} max={90} step={1} onChange={(smartExitGivebackPct) => onSettings({ smartExitGivebackPct })} />
+              </div>
+            </div>
             <p className="mt-4 rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs text-muted-foreground"><span className="font-semibold text-foreground">Kill Switch automático ativo:</span> pausa ao atingir meta diária, stop diário ou 3 perdas consecutivas.</p>
             <p className="mt-2 text-xs text-muted-foreground">Trava R/R: a IA Jev só entra se o TP estimado for &gt;= 2,5x o custo total (taxas 0,20% + spread + slippage). Cooldown obrigatório de 60s após cada saída.</p>
           </section>

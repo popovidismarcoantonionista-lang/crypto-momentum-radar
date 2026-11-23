@@ -19,6 +19,9 @@ export type JevSettings = {
   dailyStopPct: number;
   autoPause: boolean;
   maxPositions: number;
+  smartExitEnabled: boolean;
+  smartExitMinProfitPct: number;
+  smartExitGivebackPct: number;
 };
 
 export const DEFAULT_JEV_SETTINGS: JevSettings = {
@@ -37,6 +40,9 @@ export const DEFAULT_JEV_SETTINGS: JevSettings = {
   dailyStopPct: 10,
   autoPause: true,
   maxPositions: 3,
+  smartExitEnabled: true,
+  smartExitMinProfitPct: 1.2,
+  smartExitGivebackPct: 35,
 };
 
 export type JevMarket = {
@@ -158,20 +164,29 @@ export function jevLevels(entry: number, settings: Pick<JevSettings, "tp" | "sl"
   return { tp: entry * (1 + settings.tp / 100), sl: entry * (1 - settings.sl / 100) };
 }
 
-export type JevOpenPosition = { entry: number; tp: number; sl: number; peak: number; trailed: boolean };
-export type JevExit = { action: "hold" | "tp" | "sl" | "trail"; peak: number; trailed: boolean; sl: number; reason?: string };
+export type JevOpenPosition = { entry: number; tp: number; sl: number; peak: number; trailed: boolean; peakProfitPct?: number };
+export type JevExit = { action: "hold" | "tp" | "sl" | "trail" | "smart"; peak: number; trailed: boolean; sl: number; peakProfitPct: number; reason?: string };
 
-export function evaluateJevExit(position: JevOpenPosition, price: number, settings: Pick<JevSettings, "trailTrigger" | "trailDistance">): JevExit {
+export function evaluateJevExit(position: JevOpenPosition, price: number, settings: Pick<JevSettings, "trailTrigger" | "trailDistance"> & Partial<Pick<JevSettings, "smartExitEnabled" | "smartExitMinProfitPct" | "smartExitGivebackPct">>): JevExit {
   const peak = Math.max(position.peak, price);
   const trailed = position.trailed || price >= position.entry * (1 + settings.trailTrigger / 100);
   const trailingStop = trailed ? peak * (1 - settings.trailDistance / 100) : position.sl;
   const effectiveStop = Math.max(position.sl, trailingStop);
-  if (price >= position.tp) return { action: "tp", peak, trailed, sl: effectiveStop, reason: "Take Profit" };
+  const profitPct = position.entry > 0 ? (price / position.entry - 1) * 100 - 0.2 : 0; // net approx after roundtrip fees
+  const peakProfitPct = Math.max(position.peakProfitPct ?? 0, profitPct);
+  if (price >= position.tp) return { action: "tp", peak, trailed, sl: effectiveStop, peakProfitPct, reason: "Take Profit" };
   if (price <= effectiveStop) {
-    return { action: "sl", peak, trailed, sl: effectiveStop, reason: trailed && trailingStop > position.sl ? "Trailing Stop" : "Stop Loss" };
+    return { action: "sl", peak, trailed, sl: effectiveStop, peakProfitPct, reason: trailed && trailingStop > position.sl ? "Trailing Stop" : "Stop Loss" };
   }
-  if (trailed && !position.trailed) return { action: "trail", peak, trailed, sl: effectiveStop, reason: "Trailing ativado" };
-  return { action: "hold", peak, trailed, sl: effectiveStop };
+  const smartOn = settings.smartExitEnabled ?? false;
+  const minProfit = settings.smartExitMinProfitPct ?? 1.2;
+  const giveback = settings.smartExitGivebackPct ?? 35;
+  if (smartOn && peakProfitPct >= minProfit && profitPct > 0) {
+    const floor = peakProfitPct * (1 - giveback / 100);
+    if (profitPct <= floor + 1e-9) return { action: "smart", peak, trailed, sl: effectiveStop, peakProfitPct, reason: `Saída inteligente: lucro ${profitPct.toFixed(2)}% recuou do pico ${peakProfitPct.toFixed(2)}%` };
+  }
+  if (trailed && !position.trailed) return { action: "trail", peak, trailed, sl: effectiveStop, peakProfitPct, reason: "Trailing ativado" };
+  return { action: "hold", peak, trailed, sl: effectiveStop, peakProfitPct };
 }
 
 export const COOLDOWN_MS = 60_000;
