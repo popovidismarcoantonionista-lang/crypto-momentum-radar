@@ -33,8 +33,7 @@ function Dashboard() {
   const balance = engine.settings.real ? engine.realBalance : engine.paperBalance;
   const goal = engine.dayStart * (engine.settings.dailyGoalPct / 100);
   const goalProgress = Math.max(0, Math.min(100, goal > 0 ? (engine.dayPnl / goal) * 100 : 0));
-  const currentPrice = engine.currentPrice || (engine.position ? engine.candidates.find((candidate) => candidate.id === engine.position?.id)?.price ?? 0 : 0);
-  const openPnl = engine.openPnl;
+  const positions = engine.positions;
 
   const handleTest = async (keys: GateCredentials) => {
     const result = await testGateConnection({ data: { credentials: keys } });
@@ -99,7 +98,7 @@ function Dashboard() {
           </div>
 
           <div className="space-y-4 min-w-0">
-            <OpenPosition engine={engine} currentPrice={currentPrice} pnl={openPnl} />
+            <OpenPositions engine={engine} />
             <Card title={engine.selected ? `${engine.selected.label} · ${engine.selected.source === "GATE" ? "velas 1m" : "amostras DEX"}` : "Gráfico ao vivo"} icon={<Flame className="h-4 w-4 text-primary" />} right={engine.selected && <span className="num text-sm font-bold">{fmtP(engine.selected.price)}</span>}>
               <CandleChart klines={engine.klines} position={engine.position && engine.selected?.id === engine.position.id ? engine.position : null} />
             </Card>
@@ -170,15 +169,23 @@ function DexScanner({ engine }: { engine: ReturnType<typeof useTradingEngine> })
   return <><p className="mb-2 text-[10px] text-muted-foreground">Solana e Base · atualização 15s · liquidez mínima $50k · somente monitoramento</p><ul className="-mx-2 max-h-[540px] space-y-1 overflow-y-auto">{pairs.length === 0 && <li className="p-4 text-center text-xs text-muted-foreground">Buscando lançamentos na DexScreener...</li>}{pairs.map((candidate) => <li key={candidate.id} className={`rounded-lg px-2 py-2 ${candidate.safe ? "" : "opacity-65"}`}><div className="flex items-center gap-2">{candidate.safe ? <ShieldCheck className="h-3.5 w-3.5 text-buy" /> : <ShieldAlert className="h-3.5 w-3.5 text-sell" />}<span className="flex-1 truncate text-xs font-semibold">{candidate.label}</span><span className={`num text-[10px] ${candidate.change >= 0 ? "text-buy" : "text-sell"}`}>{candidate.change.toFixed(1)}% 5m</span></div><div className="num mt-1 pl-5 text-[9px] text-muted-foreground">{candidate.safe ? candidate.extra : `Reprovado: ${candidate.safeReason}`}</div></li>)}</ul></>;
 }
 
-function OpenPosition({ engine, currentPrice, pnl }: { engine: ReturnType<typeof useTradingEngine>; currentPrice: number; pnl: { fee: number; pnl: number } | null }) {
-  const position = engine.position;
-  if (!position) return <Card title="Posição Aberta Agora" icon={<Crosshair className="h-4 w-4 text-primary" />} right={<span className="rounded-full bg-muted px-2 py-1 text-[9px] font-bold text-muted-foreground">SEM POSIÇÃO</span>}><div className="flex flex-col items-center justify-center gap-2 py-5 text-center"><Crosshair className="h-8 w-8 text-muted-foreground" /><p className="text-sm font-semibold">Aguardando uma entrada da IA Jev</p><p className="max-w-md text-xs text-muted-foreground">Ao atingir {engine.settings.trigger}% de certeza e passar nos filtros, a compra {engine.settings.real ? "real" : "simulada"} será enviada automaticamente.</p></div></Card>;
-  const progress = currentPrice > 0 ? Math.max(0, Math.min(100, ((currentPrice - position.sl) / Math.max(position.tp - position.sl, Number.EPSILON)) * 100)) : 0;
-  return <Card title="Posição Aberta Agora" icon={<Crosshair className="h-4 w-4 text-buy" />} right={<span className="flex items-center gap-1.5 rounded-full bg-buy/15 px-2 py-1 text-[9px] font-bold text-buy"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-buy" />MONITORANDO TICK-A-TICK</span>}>
-    <div className="flex flex-wrap items-end justify-between gap-3"><div><div className="text-xl font-bold">{position.label}</div><div className="text-[10px] text-muted-foreground">Aberta às {new Date(position.openedAt).toLocaleTimeString("pt-BR")} · IA {position.score}%</div></div><div className={`num text-xl font-bold ${pnl && pnl.pnl >= 0 ? "text-buy" : "text-sell"}`}>{pnl ? `${pnl.pnl >= 0 ? "+" : ""}${usdt(pnl.pnl)}` : "—"}</div></div>
-    <div className="mt-4 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4"><span className="text-muted-foreground">Entrada<b className="num mt-1 block text-foreground">{fmtP(position.entry)}</b></span><span className="text-muted-foreground">Preço ao vivo<b className="num mt-1 block text-foreground">{currentPrice ? fmtP(currentPrice) : "—"}</b></span><span className="text-muted-foreground">Capital<b className="num mt-1 block text-foreground">{usdt(position.sizeUsdt)}</b></span><span className="text-muted-foreground">P/L em reais<b className={`num mt-1 block ${pnl && pnl.pnl >= 0 ? "text-buy" : "text-sell"}`}>{pnl ? brl(pnl.pnl * engine.usdBrl) : "—"}</b></span></div>
-    <div className="mt-4"><div className="mb-1 flex justify-between text-[10px] num"><span className="text-sell">SL {fmtP(position.sl)}</span><span className="text-muted-foreground">{position.trailed ? "TRAILING ATIVO" : "STOP FIXO"}</span><span className="text-buy">TP {fmtP(position.tp)}</span></div><div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full bg-primary transition-all" style={{ width: `${progress}%` }} /></div></div>
-    <div className="mt-4 flex items-center justify-between gap-3"><span className="text-[10px] text-muted-foreground">Taxa estimada {pnl ? usdt(pnl.fee) : "—"} · Pico {fmtP(position.peak)}</span><button onClick={engine.closeNow} className="rounded-lg bg-sell px-4 py-2 text-xs font-bold text-destructive-foreground">Vender agora</button></div>
+function OpenPositions({ engine }: { engine: ReturnType<typeof useTradingEngine> }) {
+  const positions = engine.positions;
+  if (!positions.length) return <Card title="Posições Abertas" icon={<Crosshair className="h-4 w-4 text-primary" />} right={<span className="rounded-full bg-muted px-2 py-1 text-[9px] font-bold text-muted-foreground">SEM POSIÇÕES</span>}><div className="flex flex-col items-center justify-center gap-2 py-5 text-center"><Crosshair className="h-8 w-8 text-muted-foreground" /><p className="text-sm font-semibold">Aguardando entradas da IA Jev</p><p className="max-w-md text-xs text-muted-foreground">Ao atingir {engine.settings.trigger}% de certeza e passar nos filtros, compras {engine.settings.real ? "reais" : "simuladas"} podem ser abertas em paralelo (até {engine.settings.maxPositions} slots).</p></div></Card>;
+  return <Card title={`Posições Abertas (${positions.length}/${engine.settings.maxPositions})`} icon={<Crosshair className="h-4 w-4 text-buy" />} right={<span className="flex items-center gap-1.5 rounded-full bg-buy/15 px-2 py-1 text-[9px] font-bold text-buy"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-buy" />MONITORANDO</span>}>
+    <div className="space-y-3">
+      {positions.map((position) => {
+        const currentPrice = position.currentPrice;
+        const pnl = position.pnl;
+        const progress = currentPrice > 0 ? Math.max(0, Math.min(100, ((currentPrice - position.sl) / Math.max(position.tp - position.sl, Number.EPSILON)) * 100)) : 0;
+        return <div key={position.id} className="rounded-lg border border-border bg-muted/20 p-3">
+          <div className="flex flex-wrap items-end justify-between gap-3"><div><div className="text-sm font-bold">{position.label}</div><div className="text-[10px] text-muted-foreground">Aberta às {new Date(position.openedAt).toLocaleTimeString("pt-BR")} • IA {position.score}%</div></div><div className={`num text-lg font-bold ${pnl && pnl.pnl >= 0 ? "text-buy" : "text-sell"}`}>{pnl ? `${pnl.pnl >= 0 ? "+" : ""}${usdt(pnl.pnl)}` : "—"}</div></div>
+          <div className="mt-3 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4"><span className="text-muted-foreground">Entrada<b className="num mt-1 block text-foreground">{fmtP(position.entry)}</b></span><span className="text-muted-foreground">Preço ao vivo<b className="num mt-1 block text-foreground">{currentPrice ? fmtP(currentPrice) : "—"}</b></span><span className="text-muted-foreground">Capital<b className="num mt-1 block text-foreground">{usdt(position.sizeUsdt)}</b></span><span className="text-muted-foreground">P/L em reais<b className={`num mt-1 block ${pnl && pnl.pnl >= 0 ? "text-buy" : "text-sell"}`}>{pnl ? brl(pnl.pnl * engine.usdBrl) : "—"}</b></span></div>
+          <div className="mt-3"><div className="mb-1 flex justify-between text-[10px] num"><span className="text-sell">SL {fmtP(position.sl)}</span><span className="text-muted-foreground">{position.trailed ? "TRAILING ATIVO" : "STOP FIXO"}</span><span className="text-buy">TP {fmtP(position.tp)}</span></div><div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full bg-primary transition-all" style={{ width: `${progress}%` }} /></div></div>
+          <div className="mt-3 flex items-center justify-between gap-3"><span className="text-[10px] text-muted-foreground">Taxa estimada {pnl ? usdt(pnl.fee) : "—"} • Pico {fmtP(position.peak)}</span><button onClick={() => engine.closeNow(position.id)} className="rounded-lg bg-sell px-3 py-2 text-xs font-bold text-destructive-foreground">Vender agora</button></div>
+        </div>;
+      })}
+    </div>
   </Card>;
 }
 

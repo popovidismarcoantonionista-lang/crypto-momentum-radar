@@ -125,6 +125,7 @@ export function SettingsModal({ open, onClose, settings, onSettings, onTest, rea
               <NumberField label="Latência simulação" value={settings.latencyMs} suffix="ms" min={0} max={10000} step={50} onChange={(latencyMs) => onSettings({ latencyMs: Math.max(0, Math.min(10000, latencyMs)) })} />
               <NumberField label="Meta diária" value={settings.dailyGoalPct} suffix="%" min={0.1} step={0.1} onChange={(dailyGoalPct) => onSettings({ dailyGoalPct })} />
               <NumberField label="Stop diário" value={settings.dailyStopPct} suffix="%" min={0.1} step={0.1} onChange={(dailyStopPct) => onSettings({ dailyStopPct })} />
+              <NumberField label="Máx. posições simultâneas" value={settings.maxPositions} suffix="" min={1} max={10} step={1} onChange={(maxPositions) => onSettings({ maxPositions: Math.max(1, Math.min(10, Math.floor(maxPositions))) })} />
             </div>
             <p className="mt-4 rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs text-muted-foreground"><span className="font-semibold text-foreground">Kill Switch automático ativo:</span> pausa ao atingir meta diária, stop diário ou 3 perdas consecutivas.</p>
             <p className="mt-2 text-xs text-muted-foreground">Trava R/R: a IA Jev só entra se o TP estimado for &gt;= 2,5x o custo total (taxas 0,20% + spread + slippage). Cooldown obrigatório de 60s após cada saída.</p>

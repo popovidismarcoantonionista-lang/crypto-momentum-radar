@@ -18,6 +18,7 @@ export type JevSettings = {
   dailyGoalPct: number;
   dailyStopPct: number;
   autoPause: boolean;
+  maxPositions: number;
 };
 
 export const DEFAULT_JEV_SETTINGS: JevSettings = {
@@ -35,6 +36,7 @@ export const DEFAULT_JEV_SETTINGS: JevSettings = {
   dailyGoalPct: 30,
   dailyStopPct: 10,
   autoPause: true,
+  maxPositions: 3,
 };
 
 export type JevMarket = {
