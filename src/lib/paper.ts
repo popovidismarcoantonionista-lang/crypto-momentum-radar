@@ -110,12 +110,13 @@ export async function afterLatency<T>(latency: number, refresh: () => Promise<T>
   await new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, latency)));
   return refresh();
 }
-export type ExecutionRecord = { id: string; time: number; pair: string; status: "Executada" | BlockStatus; mode: "PAPER" | "REAL" | "LEGADO"; score: number; reasons: Reason[]; entry?: number; exit?: number; gross?: number; fee?: number; pnl?: number; entryFee?: number; exitFee?: number; reason: string };
+export type ExecutionRecord = { id: string; time: number; pair: string; status: "Executada" | BlockStatus; mode: "PAPER" | "REAL" | "LEGADO"; score: number; reasons: Reason[]; entry?: number; exit?: number; gross?: number; fee?: number; pnl?: number; entryFee?: number; exitFee?: number; partial?: boolean; outcomePnl?: number; reason: string };
 export function performance(records: ExecutionRecord[], equity: number[]) {
-  const trades = records.filter((r) => r.status === "Executada" && r.pnl !== undefined && r.mode !== "LEGADO");
-  const wins = trades.filter((r) => (r.pnl ?? 0) > 0);
-  const profit = wins.reduce((sum, r) => sum + (r.pnl ?? 0), 0);
-  const loss = -trades.filter((r) => (r.pnl ?? 0) < 0).reduce((sum, r) => sum + (r.pnl ?? 0), 0);
+  const trades = records.filter((r) => r.status === "Executada" && !r.partial && r.pnl !== undefined && r.mode !== "LEGADO");
+  const result = (r: ExecutionRecord) => r.outcomePnl ?? r.pnl ?? 0;
+  const wins = trades.filter((r) => result(r) > 0);
+  const profit = wins.reduce((sum, r) => sum + result(r), 0);
+  const loss = -trades.filter((r) => result(r) < 0).reduce((sum, r) => sum + result(r), 0);
   let peak = 0;
   let drawdown = 0;
   for (const value of equity) { peak = Math.max(peak, value); if (peak > 0) drawdown = Math.max(drawdown, (peak - value) / peak * 100); }

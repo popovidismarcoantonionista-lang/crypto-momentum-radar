@@ -1,9 +1,10 @@
 import type { Kline, Level, Reason } from "@/lib/indicators";
 import { DEFAULT_LATENCY_MS, prefilter, type PairRules } from "@/lib/paper";
 import type { TokenIdentity } from "@/lib/leadlag";
+import { GROWTH_DEFAULTS, type GrowthSettings } from "@/lib/growth";
 
 export type JevWeights = { volume: number; rsi: number; breakout: number; book: number };
-export type JevSettings = {
+export type JevSettings = GrowthSettings & {
   trigger: number;
   intervalSeconds: number;
   weights: JevWeights;
@@ -25,10 +26,11 @@ export type JevSettings = {
 };
 
 export const DEFAULT_JEV_SETTINGS: JevSettings = {
+  ...GROWTH_DEFAULTS,
   trigger: 85,
   intervalSeconds: 5,
   weights: { volume: 30, rsi: 20, breakout: 25, book: 25 },
-  allocation: 1,
+  allocation: 0.1,
   handMode: "percent",
   fixedUsdt: 5,
   latencyMs: DEFAULT_LATENCY_MS,
@@ -36,8 +38,8 @@ export const DEFAULT_JEV_SETTINGS: JevSettings = {
   sl: 2,
   trailTrigger: 1.8,
   trailDistance: 0.8,
-  dailyGoalPct: 30,
-  dailyStopPct: 10,
+  dailyGoalPct: 10,
+  dailyStopPct: 5,
   autoPause: true,
   maxPositions: 3,
   smartExitEnabled: true,

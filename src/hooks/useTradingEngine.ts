@@ -4,13 +4,15 @@ import { useGateEvents } from "./useGateEvents";
 import { useDexRadar } from "./useDexRadar";
 import { getGateBookSnapshot, getGateOrder, placeGateOrder } from "@/lib/gateio.functions";
 import type { GateCredentials, GateOrder } from "@/lib/gateio";
-import { safetyCheck, scoreDex, type Kline, type Reason } from "@/lib/indicators";
+import { scoreDex, type Kline, type Reason } from "@/lib/indicators";
 import { COOLDOWN_MS, DEFAULT_JEV_SETTINGS, cooldownRemaining, evaluateJevExit, jevLevels, scoreJev, type JevSettings } from "@/lib/jev";
 import { afterLatency, buyPaper, sellPaper, paperPnl, prefilter, spreadOf, rewardCheck, nextLosses, haltReason, performance, type BlockStatus, type ExecutionRecord, type Check } from "@/lib/paper";
 import { leadLag } from "@/lib/leadlag";
+import { growthExit, proportionalHand } from "@/lib/growth";
+import { useFiscalMonitor } from "@/hooks/useFiscalMonitor";
 
 export type Settings = JevSettings & { real: boolean; lock: string };
-export type Position = { id: string; label: string; source: "GATE"; entry: number; tp: number; sl: number; peak: number; trailed: boolean; peakProfitPct?: number; sizeUsdt: number; quantity: number; entryFee: number; score: number; reasons: Reason[]; openedAt: number; real: boolean; orderId?: string; pendingExit?: string };
+export type Position = { id: string; label: string; source: "GATE"; entry: number; tp: number; sl: number; peak: number; trailed: boolean; target1Done?: boolean; realizedPnl?: number; peakProfitPct?: number; sizeUsdt: number; quantity: number; entryFee: number; score: number; reasons: Reason[]; openedAt: number; real: boolean; orderId?: string; pendingExit?: string };
 export type Trade = ExecutionRecord;
 export type Candidate = { id: string; label: string; source: "GATE" | "DEX"; price: number; change: number; score: number; reasons: Reason[]; safe: boolean; safeReason?: string | undefined; extra?: string; quoteVolume?: number; spread?: number | null; leadBonus?: number; leadAge?: number; blockedStatus?: BlockStatus; blockReason?: string };
 export type Log = { t: number; kind: "scan" | "filter" | "buy" | "sell" | "warn" | "info"; msg: string };
@@ -19,7 +21,7 @@ type Store = { schema: 4; settings: Settings; paper: Ledger; live: Ledger; legac
 const KEY = "ia-jev-trading-v4";
 const OLD_KEY = "ia-jev-trading-v3";
 const OLD_KEY_V2 = "ia-jev-trading-v2";
-const today = () => new Date().toLocaleDateString("sv");
+const today = () => new Intl.DateTimeFormat("sv-SE", { timeZone: "America/Sao_Paulo" }).format(new Date());
 const freshLedger = (cash: number): Ledger => ({ cash, day: today(), dayStart: cash, dayPnl: 0, losses: 0, halt: null, cooldownUntil: 0, positions: [], records: [], equity: [cash], maxEquity: cash, maxDrawdown: 0 });
 const fresh = (): Store => ({ schema: 4, settings: { ...DEFAULT_JEV_SETTINGS, weights: { ...DEFAULT_JEV_SETTINGS.weights }, real: false, lock: "AUTO" }, paper: freshLedger(17), live: freshLedger(0), legacy: [], legacyPosition: false });
 
@@ -37,7 +39,9 @@ export function useTradingEngine(credentials: GateCredentials | null) {
   const blocked = useRef(new Map<string, string>());
   const gate = useGateMarket(5);
   const events = useGateEvents(gate.market, true);
-  const dex = useDexRadar(true, null);
+  const dex = useDexRadar(true, null, store.current.settings.dexMinLiquidity);
+  const fiscal = useFiscalMonitor(store.current.settings.real ? "REAL" : "PAPER");
+  const fiscalRef = useRef(fiscal); fiscalRef.current = fiscal;
   const log = useCallback((kind: Log["kind"], msg: string) => setLogs((list) => [...list.slice(-199), { t: Date.now(), kind, msg }]), []);
   const save = useCallback(() => { try { localStorage.setItem(KEY, JSON.stringify(store.current)); } catch { /* storage unavailable */ } setTick((v) => v + 1); }, []);
   const setRun = useCallback((value: boolean) => { runningRef.current = value; setRunning(value); }, []);
@@ -55,7 +59,7 @@ export function useTradingEngine(credentials: GateCredentials | null) {
           ...fresh(),
           ...parsed,
           schema: 4,
-          settings: { ...fresh().settings, ...parsed.settings, weights: { ...DEFAULT_JEV_SETTINGS.weights, ...parsed.settings?.weights } },
+          settings: { ...fresh().settings, ...parsed.settings, handMode: "percent", weights: { ...DEFAULT_JEV_SETTINGS.weights, ...parsed.settings?.weights } },
           paper: migrateLedger(parsed.paper),
           live: migrateLedger(parsed.live),
           legacy: Array.isArray(parsed.legacy) ? parsed.legacy : [],
@@ -65,7 +69,7 @@ export function useTradingEngine(credentials: GateCredentials | null) {
         const v2 = localStorage.getItem(OLD_KEY_V2);
         if (v2) {
           const p2 = JSON.parse(v2) as { settings?: Partial<Settings>; paperBalance?: number; position?: { realQty?: string }; trades?: { time: number; pair: string; entry: number; exit: number; fee: number; pnl: number; score: number; reason: string }[] };
-          store.current.settings = { ...fresh().settings, ...p2.settings, real: false, intervalSeconds: 5, weights: { ...DEFAULT_JEV_SETTINGS.weights, ...p2.settings?.weights } };
+          store.current.settings = { ...fresh().settings, ...p2.settings, handMode: "percent", real: false, intervalSeconds: 5, weights: { ...DEFAULT_JEV_SETTINGS.weights, ...p2.settings?.weights } };
           store.current.paper = freshLedger(p2.paperBalance ?? 17);
           store.current.legacyPosition = Boolean(p2.position);
           store.current.legacy = (p2.trades ?? []).map((t, i) => ({ ...t, id: `legacy-${t.time}-${i}`, status: "Executada", mode: "LEGADO", reasons: [] }));
@@ -110,16 +114,19 @@ export function useTradingEngine(credentials: GateCredentials | null) {
     return updated;
   }, [gate.market]);
 
-  const closePosition = useCallback(async (positionId: string, reason: string) => {
+  const closePosition = useCallback(async (positionId: string, reason: string, half = false) => {
     const settings = store.current.settings;
     const ledger = settings.real ? store.current.live : store.current.paper;
     const position = ledger.positions.find((p) => p.id === positionId);
     if (!position || busy.current) return;
     busy.current = true;
     try {
-      position.pendingExit = reason;
+      if (half && position.target1Done) return;
+      if (!half) position.pendingExit = reason;
       const book = await afterLatency(position.real ? 0 : settings.latencyMs, () => refreshBook(position.id));
-      const result = sellPaper(book, book.rules, position.quantity, Date.now());
+      if (half && (book.bids[0]?.[0] ?? 0) < position.entry * (1 + settings.target1Pct / 100)) return;
+      const requestedQty = position.quantity * (half ? 0.5 : 1);
+      const result = sellPaper(book, book.rules, requestedQty, Date.now());
       if (!result.ok) { recordBlock(ledger, position.id, result, position.score, position.reasons); return; }
       let fill = result.fill;
       if (position.real) {
@@ -128,24 +135,36 @@ export function useTradingEngine(credentials: GateCredentials | null) {
         const response = await placeGateOrder({ data: { credentials: creds, symbol: position.id, side: "sell", amount: fill.quantity } });
         if (!response.ok) { log("warn", `[REAL] Venda recusada: ${response.error}`); return; }
         setOrder(response.order);
-        if (response.order.status !== "CLOSED / EXECUTADA" || response.order.executedQty < position.quantity * 0.999999 || response.order.averagePrice <= 0) {
+        if (response.order.status !== "CLOSED / EXECUTADA" || response.order.executedQty < requestedQty * 0.999999 || response.order.averagePrice <= 0) {
           position.orderId = response.order.orderId; position.pendingExit = "Ordem real pendente; confira a Gate.io"; setRun(false); log("warn", position.pendingExit); return;
         }
         if (response.order.feeCurrency !== "USDT") { setRun(false); log("warn", "Taxa real em outra moeda: conciliação necessária; posição mantida."); return; }
         fill = { ...fill, quantity: response.order.executedQty, notional: response.order.filledTotal, price: response.order.averagePrice, fee: response.order.fee };
       }
-      const gross = fill.notional - position.sizeUsdt;
-      const fee = position.entryFee + fill.fee;
+      const fraction = Math.min(1, fill.quantity / position.quantity);
+      const costBasis = position.sizeUsdt * fraction;
+      const allocatedEntryFee = position.entryFee * fraction;
+      const gross = fill.notional - costBasis;
+      const fee = allocatedEntryFee + fill.fee;
       const pnl = gross - fee;
       const residue = position.quantity - fill.quantity;
-      if (residue > 1e-9) { log("warn", `Resíduo de ${residue} unidades em ${position.id}; posição mantida para conciliação.`); setRun(false); return; }
+      const finished = residue <= Math.max(1e-9, position.quantity * 1e-10);
+      const executionId = crypto.randomUUID();
       ledger.cash += fill.notional - fill.fee;
       ledger.dayPnl += pnl;
-      ledger.losses = nextLosses(ledger.losses, pnl);
-      ledger.records = [{ id: crypto.randomUUID(), time: Date.now(), pair: position.id, status: "Executada", mode: position.real ? "REAL" : "PAPER", score: position.score, reasons: position.reasons, entry: position.entry, exit: fill.price, gross, fee, entryFee: position.entryFee, exitFee: fill.fee, pnl, reason }, ...ledger.records];
-      ledger.positions = ledger.positions.filter((p) => p !== position);
-      ledger.cooldownUntil = Date.now() + COOLDOWN_MS;
-      log("sell", `[VENDA] ${position.id} bid/média ${fmtP(fill.price)} | bruto ${gross.toFixed(4)} | taxas ${fee.toFixed(4)} | líquido ${pnl.toFixed(4)} USDT | cooldown 60s`);
+      const outcomePnl = (position.realizedPnl ?? 0) + pnl;
+      if (finished) ledger.losses = nextLosses(ledger.losses, outcomePnl);
+      ledger.records = [{ id: executionId, time: Date.now(), pair: position.id, status: "Executada", mode: position.real ? "REAL" : "PAPER", score: position.score, reasons: position.reasons, entry: position.entry, exit: fill.price, gross, fee, entryFee: allocatedEntryFee, exitFee: fill.fee, pnl, partial: !finished, ...(finished ? { outcomePnl } : {}), reason }, ...ledger.records];
+      fiscalRef.current.record({ id: executionId, time: Date.now(), mode: position.real ? "REAL" : "PAPER", side: "sell", pair: position.id, usd: fill.notional });
+      if (finished) {
+        ledger.positions = ledger.positions.filter((p) => p !== position);
+        ledger.cooldownUntil = Date.now() + COOLDOWN_MS;
+      } else {
+        position.quantity = residue; position.sizeUsdt -= costBasis; position.entryFee -= allocatedEntryFee; position.realizedPnl = outcomePnl;
+        if (half) { position.target1Done = true; position.trailed = true; position.peak = Math.max(position.peak, fill.price); }
+        else { setRun(false); log("warn", "Venda contabilizada; resíduo mantido para nova tentativa, sujeito ao mínimo do par."); }
+      }
+      log("sell", `[VENDA ${half ? "PARCIAL" : "FINAL"}] ${position.id} | líquido ${pnl.toFixed(4)} USDT | ${finished ? "cooldown 60s" : "saldo devolvido ao caixa; restante monitorado"}`);
       applyHalt(ledger); save();
     } catch (error) { log("warn", error instanceof Error ? error.message : "Falha de execução; posição mantida"); }
     finally { busy.current = false; save(); }
@@ -173,19 +192,18 @@ export function useTradingEngine(credentials: GateCredentials | null) {
         let bonus = 0, age = 0;
         const latest = item.klines.at(-1), previous = item.klines.at(-2);
         const gateChange = latest && previous && previous.c > 0 ? (latest.c / previous.c - 1) * 100 : Infinity;
-        const baseSymbol = item.symbol.replace(/_USDT$/, "");
         for (const pair of dex.pairs.current) {
           const identity = dex.identities.current[pair.id];
-          if (!identity || !safetyCheck(pair).ok) continue;
-          const sameToken = item.identity ? (item.identity.chain === identity.chain && item.identity.address.toLowerCase() === identity.address.toLowerCase()) : pair.symbol.toUpperCase() === baseSymbol.toUpperCase();
+          if (!identity || !dex.safety.current[pair.id]?.ok || !item.identity) continue;
+          const sameToken = item.identity.chain === identity.chain && item.identity.address === identity.address;
           if (!sameToken) continue;
-          const signal = leadLag(dex.samples.current[pair.id] ?? [], item.identity ?? { chain: identity.chain, address: `symbol:${baseSymbol.toUpperCase()}` }, { ...identity, address: item.identity ? identity.address : `symbol:${baseSymbol.toUpperCase()}` }, gateChange, now);
+          const signal = leadLag(dex.samples.current[pair.id] ?? [], item.identity, identity, gateChange, now);
           if (signal.bonus > bonus) { bonus = signal.bonus; age = signal.age; }
         }
         const reasons = bonus ? [...analysis.reasons, { ok: true, text: `Lead-Lag Dex verificado: +${bonus} pts (Dex ${age < 15000 ? "recente" : "atualizado"})`, pts: bonus, max: 10 }] : analysis.reasons;
         list.push({ id: item.symbol, label: item.symbol, source: "GATE", price: item.price, change: item.change24, score: Math.min(100, analysis.score + bonus), reasons, safe: analysis.safe, safeReason: analysis.safeReason, quoteVolume: item.quoteVolume, spread, leadBonus: bonus, leadAge: age, extra: `Vol $${Math.round(item.quoteVolume / 1000)}k` });
       }
-      for (const pair of dex.pairs.current) { const safety = safetyCheck(pair); const analysis = scoreDex(pair, ledger.cash); list.push({ id: pair.id, label: `${pair.symbol}/${pair.chain === "solana" ? "SOL" : "BASE"}`, source: "DEX", price: pair.price, change: pair.ch5m, score: safety.ok ? analysis.score : 0, reasons: analysis.reasons, safe: safety.ok, safeReason: safety.reason, extra: `Liq $${Math.round(pair.liquidity / 1000)}k · Vol1h $${Math.round(pair.vol1h / 1000)}k` }); }
+      for (const pair of dex.pairs.current) { const safety = dex.safety.current[pair.id] ?? { ok: false, reason: "Segurança não verificada" }; const analysis = scoreDex(pair, proportionalHand(ledger.cash, settings.allocation)); list.push({ id: pair.id, label: `${pair.symbol}/${pair.chain === "solana" ? "SOL" : "BASE"}`, source: "DEX", price: pair.price, change: pair.ch5m, score: safety.ok ? analysis.score : 0, reasons: analysis.reasons, safe: safety.ok, safeReason: safety.reason, extra: `Liq $${Math.round(pair.liquidity / 1000)}k · Vol5m $${Math.round(pair.vol5m).toLocaleString("pt-BR")}` }); }
       list.sort((a, b) => a.id === "PEARL_USDT" ? -1 : b.id === "PEARL_USDT" ? 1 : b.score - a.score); setCandidates(list);
       let equityValue = ledger.cash;
       for (const pos of ledger.positions) {
@@ -204,6 +222,13 @@ export function useTradingEngine(credentials: GateCredentials | null) {
         const bid = mkt?.bids[0]?.[0];
         if (!bid || !mkt?.bookTime || now - mkt.bookTime >= 10_000 || busy.current) continue;
         if (pos.pendingExit && !pos.real) { void closePosition(pos.id, pos.pendingExit); closedAny = true; break; }
+        if (pos.real && pos.orderId && pos.pendingExit) continue;
+        if (settings.stagedExit) {
+          const decision = growthExit(pos, bid, settings, now); pos.peak = decision.peak;
+          if (pos.target1Done) { pos.sl = Math.max(pos.sl, pos.peak * (1 - settings.runnerTrailPct / 100)); pos.trailed = true; }
+          if (decision.action !== "hold") { void closePosition(pos.id, decision.reason, decision.action === "half"); closedAny = true; break; }
+          continue;
+        }
         const decision = evaluateJevExit(pos, bid, settings);
         pos.peak = decision.peak; pos.sl = decision.sl; pos.trailed = decision.trailed; pos.peakProfitPct = decision.peakProfitPct;
         if (decision.action === "tp" || decision.action === "sl" || decision.action === "smart") { void closePosition(pos.id, decision.reason ?? "Stop Loss"); closedAny = true; break; }
@@ -227,10 +252,11 @@ export function useTradingEngine(credentials: GateCredentials | null) {
         if (ledger.positions.some((p) => p.id === best.id) || ledger.positions.length >= maxPositions) return;
         const filter = prefilter(book, book.quoteVolume, Date.now());
         if (!filter.ok) { recordBlock(ledger, best.id, filter, best.score, best.reasons); return; }
-        const intended = settings.handMode === "fixed" ? settings.fixedUsdt : ledger.cash * settings.allocation;
+        const intended = proportionalHand(ledger.cash, settings.allocation);
         const result = buyPaper(book, book.rules, ledger.cash, intended, Date.now());
         if (!result.ok) { recordBlock(ledger, best.id, result, best.score, best.reasons); return; }
-        const reward = rewardCheck(settings.tp, spreadOf(book) ?? Infinity, result.fill.slippagePct);
+        if (result.fill.notional > intended + 1e-8) { recordBlock(ledger, best.id, { ok: false, status: "Bloqueada por Ordem Mínima", reason: "Mínimo do par excede a mão proporcional; aumente o percentual ou a banca" }, best.score, best.reasons); return; }
+        const reward = rewardCheck(settings.stagedExit ? settings.target1Pct : settings.tp, spreadOf(book) ?? Infinity, result.fill.slippagePct);
         if (!reward.ok) { recordBlock(ledger, best.id, reward, best.score, best.reasons); return; }
         let fill = result.fill;
         let orderId: string | undefined;
@@ -243,7 +269,8 @@ export function useTradingEngine(credentials: GateCredentials | null) {
           fill = { ...fill, price: response.order.averagePrice, quantity: response.order.executedQty, notional: response.order.filledTotal, fee: response.order.fee, debit: response.order.filledTotal + response.order.fee };
         }
         ledger.cash -= fill.debit;
-        ledger.positions.push({ id: best.id, label: best.label, source: "GATE", entry: fill.price, ...jevLevels(fill.price, settings), peak: fill.price, trailed: false, sizeUsdt: fill.notional, quantity: fill.quantity, entryFee: fill.fee, score: best.score, reasons: best.reasons, openedAt: Date.now(), real: settings.real, ...(orderId ? { orderId } : {}) });
+        fiscalRef.current.record({ id: crypto.randomUUID(), time: Date.now(), mode: settings.real ? "REAL" : "PAPER", side: "buy", pair: best.id, usd: fill.notional });
+        ledger.positions.push({ id: best.id, label: best.label, source: "GATE", entry: fill.price, ...jevLevels(fill.price, { ...settings, tp: settings.stagedExit ? settings.target1Pct : settings.tp }), peak: fill.price, trailed: false, sizeUsdt: fill.notional, quantity: fill.quantity, entryFee: fill.fee, score: best.score, reasons: best.reasons, openedAt: Date.now(), real: settings.real, ...(orderId ? { orderId } : {}) });
         blocked.current.delete(`${settings.real}-${best.id}`);
         log("buy", `[COMPRA ${settings.real ? "REAL" : "PAPER"}] ${best.id} ask/média ${fmtP(fill.price)} | ${fill.notional.toFixed(4)} USDT | taxa ${fill.fee.toFixed(4)} | IA ${best.score}% | slots ${ledger.positions.length}/${maxPositions}${fill.adjusted ? " | mão ajustada ao mínimo" : ""}`); save();
       } catch (error) { log("warn", error instanceof Error ? error.message : "Falha ao atualizar o livro"); }
@@ -289,11 +316,12 @@ export function useTradingEngine(credentials: GateCredentials | null) {
   const updateSettings = (patch: Partial<Settings>) => {
     if (busy.current || state.paper.positions.length || state.live.positions.length) { log("warn", "Ajustes bloqueados durante posições abertas ou execução; feche as operações primeiro."); return; }
     if (patch.real && !keys.current) { log("warn", "Conecte a Gate.io antes de selecionar dinheiro real."); return; }
-    const next = { ...state.settings, ...patch, intervalSeconds: 5, autoPause: true, maxPositions: Math.max(1, Math.min(10, Math.floor(Number(patch.maxPositions ?? state.settings.maxPositions ?? 3)))), smartExitMinProfitPct: Math.max(0.1, Number(patch.smartExitMinProfitPct ?? state.settings.smartExitMinProfitPct ?? 1.2)), smartExitGivebackPct: Math.max(5, Math.min(90, Number(patch.smartExitGivebackPct ?? state.settings.smartExitGivebackPct ?? 35))) };
+    const next = { ...state.settings, ...patch, handMode: "percent" as const, intervalSeconds: 5, autoPause: true, maxPositions: Math.max(1, Math.min(10, Math.floor(Number(patch.maxPositions ?? state.settings.maxPositions ?? 3)))), smartExitMinProfitPct: Math.max(0.1, Number(patch.smartExitMinProfitPct ?? state.settings.smartExitMinProfitPct ?? 1.2)), smartExitGivebackPct: Math.max(5, Math.min(90, Number(patch.smartExitGivebackPct ?? state.settings.smartExitGivebackPct ?? 35))) };
     if (![next.tp, next.sl, next.fixedUsdt, next.dailyGoalPct, next.dailyStopPct, next.trailTrigger, next.trailDistance, next.maxPositions, next.smartExitMinProfitPct, next.smartExitGivebackPct].every((n) => Number.isFinite(n) && n > 0) || !Number.isFinite(next.latencyMs) || next.latencyMs < 0 || next.latencyMs > 10_000 || next.allocation <= 0 || next.allocation > 1) { log("warn", "Parâmetros inválidos; alteração não aplicada."); return; }
+    if (![next.target1Pct, next.runnerTrailPct, next.maxHoldMinutes, next.dexMinLiquidity].every((n) => Number.isFinite(n) && n > 0) || next.runnerTrailPct >= 100) { log("warn", "Alvo, tempo, liquidez ou trailing inválido."); return; }
     state.settings = next; lastScan.current = ""; save();
   };
-  return { settings: state.settings, positions: positionsView, position: positionsView[0] ?? null, paperBalance: state.settings.real ? state.paper.cash : equity, realBalance: state.settings.real ? equity : state.live.cash, cash: ledger.cash, dayStart: ledger.dayStart, dayPnl: ledger.dayPnl, trades: ledger.records, legacyTrades: state.legacy, legacyPosition: state.legacyPosition, halted: Boolean(ledger.halt), halt: ledger.halt, losses: ledger.losses, running, logs, candidates, selected, klines, status, order, openPnl: positionsView[0]?.pnl ?? null, currentPrice: positionsView[0]?.currentPrice ?? 0, metrics: { ...metrics, fees: metrics.fees + ledger.positions.reduce((s, p) => s + p.entryFee, 0), drawdown: ledger.equity.length > 1 ? ledger.maxDrawdown : null }, connected: gate.connected, eventConnected: events.connected, marketError: gate.error, lastUpdate: gate.lastUpdate, usdBrl: gate.usdBrl.current, dexLastUpdate: dex.lastUpdate, cooldown, metadataReady: Boolean(selected && gate.market.current[selected.id]?.rules), updateSettings,
+  return { fiscal, dexError: dex.error, settings: state.settings, positions: positionsView, position: positionsView[0] ?? null, paperBalance: state.settings.real ? state.paper.cash : equity, realBalance: state.settings.real ? equity : state.live.cash, cash: ledger.cash, dayStart: ledger.dayStart, dayPnl: ledger.dayPnl, trades: ledger.records, legacyTrades: state.legacy, legacyPosition: state.legacyPosition, halted: Boolean(ledger.halt), halt: ledger.halt, losses: ledger.losses, running, logs, candidates, selected, klines, status, order, openPnl: positionsView[0]?.pnl ?? null, currentPrice: positionsView[0]?.currentPrice ?? 0, metrics: { ...metrics, fees: metrics.fees + ledger.positions.reduce((s, p) => s + p.entryFee, 0), drawdown: ledger.equity.length > 1 ? ledger.maxDrawdown : null }, connected: gate.connected, eventConnected: events.connected, marketError: gate.error, lastUpdate: gate.lastUpdate, usdBrl: gate.usdBrl.current, dexLastUpdate: dex.lastUpdate, cooldown, metadataReady: Boolean(selected && gate.market.current[selected.id]?.rules), updateSettings,
     updateRealBalance: (value: number) => { if (!state.live.positions.length) { state.live.cash = value; if (!state.live.records.length) state.live.dayStart = value; save(); } },
     start: () => { applyHalt(ledger); if (ledger.halt || state.legacyPosition || busy.current) { log("warn", "Trava ativa; confira o alerta antes de retomar."); return; } if (state.settings.real && !keys.current) { log("warn", "Reconecte a Gate.io."); return; } setRun(true); lastScan.current = ""; log("info", `IA Jev iniciada em ${state.settings.real ? "REAL" : "PAPER"}.`); },
     stop: () => { setRun(false); log("info", "Motor pausado; proteção da posição permanece ativa."); },
