@@ -96,10 +96,14 @@ export function marketMetrics(klines: Kline[]) {
 
 export function antiTopCheck(klines: Kline[]) {
   const m = marketMetrics(klines);
-  if (m.peakGain15 <= 15) return { ok: true as const, reason: "Sem estirão acima de 15% nos últimos 15 minutos" };
+  if (m.peakGain15 <= 15)
+    return { ok: true as const, reason: "Sem estirão acima de 15% nos últimos 15 minutos" };
   const validPullback = m.pullback >= 1.5 && m.pullback <= 2.5 && m.volumeRatio >= 1;
   if (validPullback) {
-    return { ok: true as const, reason: `Pullback válido de ${m.pullback.toFixed(2)}% com retomada de volume` };
+    return {
+      ok: true as const,
+      reason: `Pullback válido de ${m.pullback.toFixed(2)}% com retomada de volume`,
+    };
   }
   return {
     ok: false as const,
@@ -122,32 +126,86 @@ function rsi7(closes: number[]) {
 
 export function scoreJev(market: JevMarket, weights: JevWeights, now = Date.now()): JevAnalysis {
   const filter = prefilter(market, market.quoteVolume, now);
-  if (!filter.ok) return { score: 0, reasons: [], safe: false, safeReason: filter.reason, change5: 0, change15: 0, volumeRatio: 0 };
+  if (!filter.ok)
+    return {
+      score: 0,
+      reasons: [],
+      safe: false,
+      safeReason: filter.reason,
+      change5: 0,
+      change15: 0,
+      volumeRatio: 0,
+    };
   const m = marketMetrics(market.klines);
   const totalWeight = Math.max(1, weights.volume + weights.rsi + weights.breakout + weights.book);
   const normalized = {
     volume: Math.round((weights.volume / totalWeight) * 100),
     rsi: Math.round((weights.rsi / totalWeight) * 100),
     breakout: Math.round((weights.breakout / totalWeight) * 100),
-    book: 100 - Math.round((weights.volume / totalWeight) * 100) - Math.round((weights.rsi / totalWeight) * 100) - Math.round((weights.breakout / totalWeight) * 100),
+    book:
+      100 -
+      Math.round((weights.volume / totalWeight) * 100) -
+      Math.round((weights.rsi / totalWeight) * 100) -
+      Math.round((weights.breakout / totalWeight) * 100),
   };
 
   const volumeMetric = clamp(((m.volumeRatio - 0.8) / 1.2) * 100);
   const r = rsi7(market.klines.map((k) => k.c));
-  const rsiMetric = r < 28 || (r >= 55 && r <= 68) ? 100 : r < 40 || (r >= 50 && r < 55) ? 55 : r > 68 && r <= 75 ? 35 : 10;
+  const rsiMetric =
+    r < 28 || (r >= 55 && r <= 68)
+      ? 100
+      : r < 40 || (r >= 50 && r < 55)
+        ? 55
+        : r > 68 && r <= 75
+          ? 35
+          : 10;
   const nearBreakout = m.current >= m.peak15 * 0.985;
-  const breakoutMetric = m.change5 >= 0.5 && m.change5 <= 5 && nearBreakout ? 100 : m.change5 > 0 ? 55 : m.change5 <= -5 && m.change5 >= -10 && m.change15 > 0 ? 65 : 10;
-  const bidVolume = market.bids.slice(0, 10).reduce((sum, [price, quantity]) => sum + price * quantity, 0);
-  const askVolume = market.asks.slice(0, 10).reduce((sum, [price, quantity]) => sum + price * quantity, 0);
+  const breakoutMetric =
+    m.change5 >= 0.5 && m.change5 <= 5 && nearBreakout
+      ? 100
+      : m.change5 > 0
+        ? 55
+        : m.change5 <= -5 && m.change5 >= -10 && m.change15 > 0
+          ? 65
+          : 10;
+  const bidVolume = market.bids
+    .slice(0, 10)
+    .reduce((sum, [price, quantity]) => sum + price * quantity, 0);
+  const askVolume = market.asks
+    .slice(0, 10)
+    .reduce((sum, [price, quantity]) => sum + price * quantity, 0);
   const pressure = bidVolume + askVolume > 0 ? bidVolume / (bidVolume + askVolume) : 0.5;
   const bookMetric = clamp(((pressure - 0.45) / 0.2) * 100);
 
   const weighted = (metric: number, max: number) => Math.round((metric / 100) * max);
   const reasons: Reason[] = [
-    { ok: volumeMetric >= 70, pts: weighted(volumeMetric, normalized.volume), max: normalized.volume, text: `Aceleração de volume ${Math.round((m.volumeRatio - 1) * 100)}% vs. média anterior` },
-    { ok: rsiMetric === 100, pts: weighted(rsiMetric, normalized.rsi), max: normalized.rsi, text: r < 28 ? `RSI(7) em sobrevenda (${r.toFixed(1)})` : `RSI(7) em ${r >= 55 && r <= 68 ? "rompimento saudável" : "zona neutra"} (${r.toFixed(1)})` },
-    { ok: breakoutMetric === 100, pts: weighted(breakoutMetric, normalized.breakout), max: normalized.breakout, text: `Rompimento de preço: ${m.change5.toFixed(2)}% em 5m${nearBreakout ? " próximo ao topo" : ""}` },
-    { ok: bookMetric >= 70, pts: weighted(bookMetric, normalized.book), max: normalized.book, text: `Fluxo do livro: ${Math.round(pressure * 100)}% de pressão compradora` },
+    {
+      ok: volumeMetric >= 70,
+      pts: weighted(volumeMetric, normalized.volume),
+      max: normalized.volume,
+      text: `Aceleração de volume ${Math.round((m.volumeRatio - 1) * 100)}% vs. média anterior`,
+    },
+    {
+      ok: rsiMetric === 100,
+      pts: weighted(rsiMetric, normalized.rsi),
+      max: normalized.rsi,
+      text:
+        r < 28
+          ? `RSI(7) em sobrevenda (${r.toFixed(1)})`
+          : `RSI(7) em ${r >= 55 && r <= 68 ? "rompimento saudável" : "zona neutra"} (${r.toFixed(1)})`,
+    },
+    {
+      ok: breakoutMetric === 100,
+      pts: weighted(breakoutMetric, normalized.breakout),
+      max: normalized.breakout,
+      text: `Rompimento de preço: ${m.change5.toFixed(2)}% em 5m${nearBreakout ? " próximo ao topo" : ""}`,
+    },
+    {
+      ok: bookMetric >= 70,
+      pts: weighted(bookMetric, normalized.book),
+      max: normalized.book,
+      text: `Fluxo do livro: ${Math.round(pressure * 100)}% de pressão compradora`,
+    },
   ];
   const antiTop = antiTopCheck(market.klines);
   const score = reasons.reduce((sum, reason) => sum + reason.pts, 0);
@@ -166,39 +224,89 @@ export function jevLevels(entry: number, settings: Pick<JevSettings, "tp" | "sl"
   return { tp: entry * (1 + settings.tp / 100), sl: entry * (1 - settings.sl / 100) };
 }
 
-export type JevOpenPosition = { entry: number; tp: number; sl: number; peak: number; trailed: boolean; peakProfitPct?: number };
-export type JevExit = { action: "hold" | "tp" | "sl" | "trail" | "smart"; peak: number; trailed: boolean; sl: number; peakProfitPct: number; reason?: string };
+export type JevOpenPosition = {
+  entry: number;
+  tp: number;
+  sl: number;
+  peak: number;
+  trailed: boolean;
+  peakProfitPct?: number;
+};
+export type JevExit = {
+  action: "hold" | "tp" | "sl" | "trail" | "smart";
+  peak: number;
+  trailed: boolean;
+  sl: number;
+  peakProfitPct: number;
+  reason?: string;
+};
 
-export function evaluateJevExit(position: JevOpenPosition, price: number, settings: Pick<JevSettings, "trailTrigger" | "trailDistance"> & Partial<Pick<JevSettings, "smartExitEnabled" | "smartExitMinProfitPct" | "smartExitGivebackPct">>): JevExit {
+export function evaluateJevExit(
+  position: JevOpenPosition,
+  price: number,
+  settings: Pick<JevSettings, "trailTrigger" | "trailDistance"> &
+    Partial<
+      Pick<JevSettings, "smartExitEnabled" | "smartExitMinProfitPct" | "smartExitGivebackPct">
+    >,
+): JevExit {
   const peak = Math.max(position.peak, price);
   const trailed = position.trailed || price >= position.entry * (1 + settings.trailTrigger / 100);
   const trailingStop = trailed ? peak * (1 - settings.trailDistance / 100) : position.sl;
   const effectiveStop = Math.max(position.sl, trailingStop);
   const profitPct = position.entry > 0 ? (price / position.entry - 1) * 100 - 0.2 : 0; // net approx after roundtrip fees
   const peakProfitPct = Math.max(position.peakProfitPct ?? 0, profitPct);
-  if (price >= position.tp) return { action: "tp", peak, trailed, sl: effectiveStop, peakProfitPct, reason: "Take Profit" };
+  if (price >= position.tp)
+    return { action: "tp", peak, trailed, sl: effectiveStop, peakProfitPct, reason: "Take Profit" };
   if (price <= effectiveStop) {
-    return { action: "sl", peak, trailed, sl: effectiveStop, peakProfitPct, reason: trailed && trailingStop > position.sl ? "Trailing Stop" : "Stop Loss" };
+    return {
+      action: "sl",
+      peak,
+      trailed,
+      sl: effectiveStop,
+      peakProfitPct,
+      reason: trailed && trailingStop > position.sl ? "Trailing Stop" : "Stop Loss",
+    };
   }
   const smartOn = settings.smartExitEnabled ?? false;
   const minProfit = settings.smartExitMinProfitPct ?? 1.2;
   const giveback = settings.smartExitGivebackPct ?? 35;
   if (smartOn && peakProfitPct >= minProfit && profitPct > 0) {
     const floor = peakProfitPct * (1 - giveback / 100);
-    if (profitPct <= floor + 1e-9) return { action: "smart", peak, trailed, sl: effectiveStop, peakProfitPct, reason: `Saída inteligente: lucro ${profitPct.toFixed(2)}% recuou do pico ${peakProfitPct.toFixed(2)}%` };
+    if (profitPct <= floor + 1e-9)
+      return {
+        action: "smart",
+        peak,
+        trailed,
+        sl: effectiveStop,
+        peakProfitPct,
+        reason: `Saída inteligente: lucro ${profitPct.toFixed(2)}% recuou do pico ${peakProfitPct.toFixed(2)}%`,
+      };
   }
-  if (trailed && !position.trailed) return { action: "trail", peak, trailed, sl: effectiveStop, peakProfitPct, reason: "Trailing ativado" };
+  if (trailed && !position.trailed)
+    return {
+      action: "trail",
+      peak,
+      trailed,
+      sl: effectiveStop,
+      peakProfitPct,
+      reason: "Trailing ativado",
+    };
   return { action: "hold", peak, trailed, sl: effectiveStop, peakProfitPct };
 }
 
 export const COOLDOWN_MS = 60_000;
-export const cooldownRemaining = (cooldownUntil: number, now: number) => Math.max(0, Math.ceil((cooldownUntil - now) / 1000));
+export const cooldownRemaining = (cooldownUntil: number, now: number) =>
+  Math.max(0, Math.ceil((cooldownUntil - now) / 1000));
 export const roundTripPnl = (sizeUsdt: number, entry: number, exit: number) => {
   const fee = sizeUsdt * 0.001 + sizeUsdt * (exit / entry) * 0.001;
   return { fee, pnl: sizeUsdt * (exit / entry - 1) - fee };
 };
 
-export function jevDailyState(dayPnl: number, dayStart: number, settings: Pick<JevSettings, "dailyGoalPct" | "dailyStopPct">) {
+export function jevDailyState(
+  dayPnl: number,
+  dayStart: number,
+  settings: Pick<JevSettings, "dailyGoalPct" | "dailyStopPct">,
+) {
   if (dayPnl <= -dayStart * (settings.dailyStopPct / 100) + 1e-9) return "stop" as const;
   if (dayPnl >= dayStart * (settings.dailyGoalPct / 100) - 1e-9) return "goal" as const;
   return "ok" as const;

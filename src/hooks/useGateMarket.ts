@@ -22,7 +22,10 @@ export function useGateMarket(intervalSeconds: number) {
         const next: Record<string, JevMarket> = {};
         for (const item of result.markets) {
           const previous = market.current[item.symbol];
-          next[item.symbol] = item.klines.length && item.bids.length && item.asks.length ? { ...item, bookTime: result.fetchedAt } : { ...item, klines: previous?.klines ?? [], bids: [], asks: [] };
+          next[item.symbol] =
+            item.klines.length && item.bids.length && item.asks.length
+              ? { ...item, bookTime: result.fetchedAt }
+              : { ...item, klines: previous?.klines ?? [], bids: [], asks: [] };
         }
         market.current = next;
         usdBrl.current = result.usdBrl;
@@ -40,7 +43,10 @@ export function useGateMarket(intervalSeconds: number) {
     };
     void load();
     const id = setInterval(load, Math.max(3, intervalSeconds) * 1000);
-    return () => { active = false; clearInterval(id); };
+    return () => {
+      active = false;
+      clearInterval(id);
+    };
   }, [intervalSeconds]);
 
   return { market, usdBrl, version, connected, lastUpdate, error };

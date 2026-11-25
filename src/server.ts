@@ -7,13 +7,25 @@ type ServerEntry = {
   fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> | Response;
 };
 
-type BridgeSignal = { id: string; source: string; symbol: string; action: "buy" | "sell" | "hold"; score?: number; reason?: string; createdAt: number; consumed?: boolean };
+type BridgeSignal = {
+  id: string;
+  source: string;
+  symbol: string;
+  action: "buy" | "sell" | "hold";
+  score?: number;
+  reason?: string;
+  createdAt: number;
+  consumed?: boolean;
+};
 
 const bridgeSignals: BridgeSignal[] = [];
 const BRIDGE_MAX = 200;
 
 function json(data: unknown, status = 200) {
-  return new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+  });
 }
 
 function readToken(request: Request, url: URL) {
@@ -28,7 +40,12 @@ async function handleBridge(request: Request): Promise<Response | null> {
   if (token && provided !== token) return json({ ok: false, error: "Unauthorized" }, 401);
 
   if (url.pathname === "/api/bridge/status") {
-    return json({ ok: true, service: "ia-jev-bridge", time: Date.now(), pendingSignals: bridgeSignals.filter((s) => !s.consumed).length });
+    return json({
+      ok: true,
+      service: "ia-jev-bridge",
+      time: Date.now(),
+      pendingSignals: bridgeSignals.filter((s) => !s.consumed).length,
+    });
   }
 
   if (url.pathname === "/api/bridge/signals" && request.method === "GET") {
@@ -39,16 +56,23 @@ async function handleBridge(request: Request): Promise<Response | null> {
   }
 
   if (url.pathname === "/api/bridge/signal" && request.method === "POST") {
-    let body: any;
-    try { body = await request.json(); } catch { return json({ ok: false, error: "Invalid JSON" }, 400); }
-    const symbol = String(body?.symbol ?? "").toUpperCase().replace(/[^A-Z0-9_]/g, "");
-    const action = body?.action;
-    if (!symbol.endsWith("_USDT") || !["buy", "sell", "hold"].includes(action)) return json({ ok: false, error: "Invalid signal" }, 400);
-    const score = Number.isFinite(Number(body?.score)) ? Number(body.score) : undefined;
-    const reason = body?.reason ? String(body.reason).slice(0, 200) : undefined;
+    let body: Record<string, unknown>;
+    try {
+      body = (await request.json()) as Record<string, unknown>;
+    } catch {
+      return json({ ok: false, error: "Invalid JSON" }, 400);
+    }
+    const symbol = String(body["symbol"] ?? "")
+      .toUpperCase()
+      .replace(/[^A-Z0-9_]/g, "");
+    const action = body["action"];
+    if (!symbol.endsWith("_USDT") || (action !== "buy" && action !== "sell" && action !== "hold"))
+      return json({ ok: false, error: "Invalid signal" }, 400);
+    const score = Number.isFinite(Number(body["score"])) ? Number(body["score"]) : undefined;
+    const reason = body["reason"] ? String(body["reason"]).slice(0, 200) : undefined;
     const signal: BridgeSignal = {
       id: crypto.randomUUID(),
-      source: String(body?.source ?? "external").slice(0, 50),
+      source: String(body["source"] ?? "external").slice(0, 50),
       symbol,
       action,
       createdAt: Date.now(),
