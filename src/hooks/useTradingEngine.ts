@@ -3,6 +3,7 @@ import { useGateMarket } from "./useGateMarket";
 import { useGateEvents } from "./useGateEvents";
 import { useDexRadar } from "./useDexRadar";
 import { getGateBookSnapshot, getGateOrder, placeGateOrder } from "@/lib/gateio.functions";
+import { getMexcOrder, placeMexcOrder } from "@/lib/mexc.functions";
 import type { GateCredentials, GateOrder } from "@/lib/gateio";
 import { scoreDex, type Kline, type Reason } from "@/lib/indicators";
 import {
@@ -33,7 +34,7 @@ import { leadLag } from "@/lib/leadlag";
 import { growthExit, proportionalHand } from "@/lib/growth";
 import { useFiscalMonitor } from "@/hooks/useFiscalMonitor";
 
-export type Settings = JevSettings & { real: boolean; lock: string };
+export type Settings = JevSettings & { real: boolean; lock: string; exchange: "GATE" | "MEXC" };
 export type Position = {
   id: string;
   label: string;
@@ -128,6 +129,7 @@ const fresh = (): Store => ({
     weights: { ...DEFAULT_JEV_SETTINGS.weights },
     real: false,
     lock: "AUTO",
+    exchange: "GATE",
   },
   paper: freshLedger(17),
   live: freshLedger(0),
@@ -135,7 +137,10 @@ const fresh = (): Store => ({
   legacyPosition: false,
 });
 
-export function useTradingEngine(credentials: GateCredentials | null) {
+export function useTradingEngine(
+  credentials: GateCredentials | null,
+  mexcCredentials: GateCredentials | null = null,
+) {
   const store = useRef<Store>(fresh());
   const [, setTick] = useState(0);
   const [running, setRunning] = useState(false);
@@ -144,8 +149,12 @@ export function useTradingEngine(credentials: GateCredentials | null) {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [order, setOrder] = useState<GateOrder | null>(null);
   const busy = useRef(false);
-  const keys = useRef(credentials);
-  keys.current = credentials;
+  const gateKeys = useRef(credentials);
+  const mexcKeys = useRef(mexcCredentials);
+  gateKeys.current = credentials;
+  mexcKeys.current = mexcCredentials;
+  const activeKeys = () =>
+    store.current.settings.exchange === "MEXC" ? mexcKeys.current : gateKeys.current;
   const lastScan = useRef("");
   const blocked = useRef(new Map<string, string>());
   const gate = useGateMarket(5);
@@ -206,6 +215,7 @@ export function useTradingEngine(credentials: GateCredentials | null) {
             ...fresh().settings,
             ...parsed.settings,
             handMode: "percent",
+            exchange: parsed.settings?.exchange === "MEXC" ? "MEXC" : "GATE",
             weights: { ...DEFAULT_JEV_SETTINGS.weights, ...parsed.settings?.weights },
           },
           paper: migrateLedger(parsed.paper),
@@ -365,12 +375,13 @@ export function useTradingEngine(credentials: GateCredentials | null) {
         }
         let fill = result.fill;
         if (position.real) {
-          const creds = keys.current;
+          const creds = activeKeys();
           if (!creds) {
             log("warn", "Reconecte suas chaves para vender; posição mantida.");
             return;
           }
-          const response = await placeGateOrder({
+          const placeOrder = settings.exchange === "MEXC" ? placeMexcOrder : placeGateOrder;
+          const response = await placeOrder({
             data: { credentials: creds, symbol: position.id, side: "sell", amount: fill.quantity },
           });
           if (!response.ok) {
@@ -741,9 +752,10 @@ export function useTradingEngine(credentials: GateCredentials | null) {
         let fill = result.fill;
         let orderId: string | undefined;
         if (settings.real) {
-          const creds = keys.current;
+          const creds = activeKeys();
           if (!creds) return;
-          const response = await placeGateOrder({
+          const placeOrder = settings.exchange === "MEXC" ? placeMexcOrder : placeGateOrder;
+          const response = await placeOrder({
             data: { credentials: creds, symbol: best.id, side: "buy", amount: fill.notional },
           });
           if (!response.ok) {
@@ -837,15 +849,17 @@ export function useTradingEngine(credentials: GateCredentials | null) {
   ]);
 
   useEffect(() => {
-    if (!order || order.status !== "OPEN" || !credentials) return;
+    const activeCreds = store.current.settings.exchange === "MEXC" ? mexcCredentials : credentials;
+    if (!order || order.status !== "OPEN" || !activeCreds) return;
     const interval = setInterval(async () => {
-      const response = await getGateOrder({
-        data: { credentials, symbol: order.symbol, orderId: order.orderId },
+      const getOrder = store.current.settings.exchange === "MEXC" ? getMexcOrder : getGateOrder;
+      const response = await getOrder({
+        data: { credentials: activeCreds, symbol: order.symbol, orderId: order.orderId },
       });
       if (response.ok) setOrder(response.order);
     }, 3000);
     return () => clearInterval(interval);
-  }, [credentials, order]);
+  }, [credentials, mexcCredentials, order]);
   useEffect(() => {
     let active = true;
     const poll = async () => {
@@ -936,8 +950,8 @@ export function useTradingEngine(credentials: GateCredentials | null) {
       );
       return;
     }
-    if (patch.real && !keys.current) {
-      log("warn", "Conecte a Gate.io antes de selecionar dinheiro real.");
+    if (patch.real && !activeKeys()) {
+      log("warn", `Conecte a ${state.settings.exchange === "MEXC" ? "MEXC" : "Gate.io"} antes de selecionar dinheiro real.`);
       return;
     }
     const next = {
@@ -1050,8 +1064,8 @@ export function useTradingEngine(credentials: GateCredentials | null) {
         log("warn", "Trava ativa; confira o alerta antes de retomar.");
         return;
       }
-      if (state.settings.real && !keys.current) {
-        log("warn", "Reconecte a Gate.io.");
+      if (state.settings.real && !activeKeys()) {
+        log("warn", `Reconecte a ${state.settings.exchange === "MEXC" ? "MEXC" : "Gate.io"}.`);
         return;
       }
       setRun(true);

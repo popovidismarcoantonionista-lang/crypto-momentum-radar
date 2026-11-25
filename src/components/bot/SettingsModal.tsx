@@ -19,7 +19,8 @@ type Props = {
   onClose: () => void;
   settings: Settings;
   onSettings: (patch: Partial<Settings>) => void;
-  onTest: (credentials: GateCredentials) => Promise<GateBalanceResult>;
+  onTestGate: (credentials: GateCredentials) => Promise<GateBalanceResult>;
+  onTestMexc: (credentials: GateCredentials) => Promise<GateBalanceResult>;
   realBalance: number;
 };
 
@@ -92,12 +93,25 @@ function WeightSlider({
   );
 }
 
-export function SettingsModal({ open, onClose, settings, onSettings, onTest, realBalance }: Props) {
-  const [apiKey, setApiKey] = useState("");
-  const [apiSecret, setApiSecret] = useState("");
-  const [visible, setVisible] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [result, setResult] = useState<GateBalanceResult | null>(null);
+export function SettingsModal({
+  open,
+  onClose,
+  settings,
+  onSettings,
+  onTestGate,
+  onTestMexc,
+  realBalance,
+}: Props) {
+  const [gateKey, setGateKey] = useState("");
+  const [gateSecret, setGateSecret] = useState("");
+  const [gateVisible, setGateVisible] = useState(false);
+  const [gateTesting, setGateTesting] = useState(false);
+  const [gateResult, setGateResult] = useState<GateBalanceResult | null>(null);
+  const [mexcKey, setMexcKey] = useState("");
+  const [mexcSecret, setMexcSecret] = useState("");
+  const [mexcVisible, setMexcVisible] = useState(false);
+  const [mexcTesting, setMexcTesting] = useState(false);
+  const [mexcResult, setMexcResult] = useState<GateBalanceResult | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -109,21 +123,32 @@ export function SettingsModal({ open, onClose, settings, onSettings, onTest, rea
   }, [open, onClose]);
 
   if (!open) return null;
-  const test = async () => {
-    setTesting(true);
-    setResult(null);
-    const response = await onTest({ apiKey, apiSecret });
-    setResult(response);
-    setTesting(false);
+  const testGate = async () => {
+    setGateTesting(true);
+    setGateResult(null);
+    const response = await onTestGate({ apiKey: gateKey, apiSecret: gateSecret });
+    setGateResult(response);
+    setGateTesting(false);
   };
+  const testMexc = async () => {
+    setMexcTesting(true);
+    setMexcResult(null);
+    const response = await onTestMexc({ apiKey: mexcKey, apiSecret: mexcSecret });
+    setMexcResult(response);
+    setMexcTesting(false);
+  };
+  const activeResult = settings.exchange === "MEXC" ? mexcResult : gateResult;
+  const exchangeName = settings.exchange === "MEXC" ? "MEXC" : "Gate.io";
   const selectReal = () => {
-    if (!result?.ok) {
-      setResult({ ok: false, error: "Primeiro teste a conexão e valide o saldo real." });
+    if (!activeResult?.ok) {
+      const msg = `Primeiro teste a conexão e valide o saldo real na ${exchangeName}.`;
+      if (settings.exchange === "MEXC") setMexcResult({ ok: false, error: msg });
+      else setGateResult({ ok: false, error: msg });
       return;
     }
     if (
       window.confirm(
-        "ATENÇÃO: a IA Jev poderá enviar ordens reais à sua conta Gate.io. Deseja ativar o Modo Real?",
+        `ATENÇÃO: a IA Jev poderá enviar ordens reais à sua conta ${exchangeName}. Deseja ativar o Modo Real?`,
       )
     )
       onSettings({ real: true });
@@ -168,74 +193,158 @@ export function SettingsModal({ open, onClose, settings, onSettings, onTest, rea
           <section>
             <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold">
               <KeyRound className="h-4 w-4 text-primary" />
-              Credenciais da Gate.io
+              Corretora & Credenciais API
             </h3>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <label className="text-xs text-muted-foreground">
-                API Key
-                <input
-                  type="password"
-                  autoComplete="off"
-                  value={apiKey}
-                  onChange={(event) => {
-                    setApiKey(event.target.value);
-                    setResult(null);
-                  }}
-                  className={`${inputClass} mt-1.5 font-mono`}
-                  placeholder="Sua API Key"
-                />
-              </label>
-              <label className="text-xs text-muted-foreground">
-                Secret Key
-                <span className="relative mt-1.5 block">
-                  <input
-                    type={visible ? "text" : "password"}
-                    autoComplete="new-password"
-                    value={apiSecret}
-                    onChange={(event) => {
-                      setApiSecret(event.target.value);
-                      setResult(null);
-                    }}
-                    className={`${inputClass} pr-11 font-mono`}
-                    placeholder="Sua Secret Key"
-                  />
-                  <button
-                    type="button"
-                    aria-label={visible ? "Ocultar Secret Key" : "Exibir Secret Key"}
-                    onClick={() => setVisible((value) => !value)}
-                    className="absolute right-1 top-1 rounded p-2 text-muted-foreground hover:text-foreground"
-                  >
-                    {visible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </button>
-                </span>
-              </label>
-            </div>
-            <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
+            <div className="mb-3 grid gap-2 sm:grid-cols-2">
               <button
-                disabled={testing || !apiKey || !apiSecret}
-                onClick={test}
-                className="flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2.5 text-xs font-bold text-primary-foreground disabled:opacity-40"
+                onClick={() => onSettings({ exchange: "GATE" })}
+                className={`rounded-lg border p-3 text-left text-xs ${settings.exchange === "GATE" ? "border-primary bg-primary/10" : "border-border bg-muted/50"}`}
               >
-                {testing ? (
-                  <LoaderCircle className="h-4 w-4 animate-spin" />
-                ) : (
-                  <CheckCircle2 className="h-4 w-4" />
-                )}
-                Testar Conexão & Ver Saldo Real USDT
+                <span className="block font-bold">Gate.io</span>
+                <span className="text-muted-foreground">Spot USDT · HMAC SHA512</span>
               </button>
-              {result && (
-                <p className={`text-xs ${result.ok ? "text-buy" : "text-sell"}`}>
-                  {result.ok
-                    ? `Conectado · ${result.available.toFixed(4)} USDT disponíveis · ${result.locked.toFixed(4)} em ordens`
-                    : result.error}
-                </p>
-              )}
+              <button
+                onClick={() => onSettings({ exchange: "MEXC" })}
+                className={`rounded-lg border p-3 text-left text-xs ${settings.exchange === "MEXC" ? "border-primary bg-primary/10" : "border-border bg-muted/50"}`}
+              >
+                <span className="block font-bold">MEXC</span>
+                <span className="text-muted-foreground">Spot USDT · HMAC SHA256</span>
+              </button>
             </div>
+
+            <div className={settings.exchange === "GATE" ? "block" : "hidden"}>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="text-xs text-muted-foreground">
+                  API Key
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    value={gateKey}
+                    onChange={(e) => {
+                      setGateKey(e.target.value);
+                      setGateResult(null);
+                    }}
+                    className={`${inputClass} mt-1.5 font-mono`}
+                    placeholder="Gate.io API Key"
+                  />
+                </label>
+                <label className="text-xs text-muted-foreground">
+                  Secret Key
+                  <span className="relative mt-1.5 block">
+                    <input
+                      type={gateVisible ? "text" : "password"}
+                      autoComplete="new-password"
+                      value={gateSecret}
+                      onChange={(e) => {
+                        setGateSecret(e.target.value);
+                        setGateResult(null);
+                      }}
+                      className={`${inputClass} pr-11 font-mono`}
+                      placeholder="Gate.io Secret Key"
+                    />
+                    <button
+                      type="button"
+                      aria-label={gateVisible ? "Ocultar Secret Key" : "Exibir Secret Key"}
+                      onClick={() => setGateVisible((v) => !v)}
+                      className="absolute right-1 top-1 rounded p-2 text-muted-foreground hover:text-foreground"
+                    >
+                      {gateVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </span>
+                </label>
+              </div>
+              <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
+                <button
+                  disabled={gateTesting || !gateKey || !gateSecret}
+                  onClick={testGate}
+                  className="flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2.5 text-xs font-bold text-primary-foreground disabled:opacity-40"
+                >
+                  {gateTesting ? (
+                    <LoaderCircle className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <CheckCircle2 className="h-4 w-4" />
+                  )}
+                  Testar Gate.io & Ver Saldo USDT
+                </button>
+                {gateResult && (
+                  <p className={`text-xs ${gateResult.ok ? "text-buy" : "text-sell"}`}>
+                    {gateResult.ok
+                      ? `Conectado · ${gateResult.available.toFixed(4)} USDT disponíveis · ${gateResult.locked.toFixed(4)} em ordens`
+                      : gateResult.error}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className={settings.exchange === "MEXC" ? "block" : "hidden"}>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="text-xs text-muted-foreground">
+                  API Key
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    value={mexcKey}
+                    onChange={(e) => {
+                      setMexcKey(e.target.value);
+                      setMexcResult(null);
+                    }}
+                    className={`${inputClass} mt-1.5 font-mono`}
+                    placeholder="MEXC API Key"
+                  />
+                </label>
+                <label className="text-xs text-muted-foreground">
+                  Secret Key
+                  <span className="relative mt-1.5 block">
+                    <input
+                      type={mexcVisible ? "text" : "password"}
+                      autoComplete="new-password"
+                      value={mexcSecret}
+                      onChange={(e) => {
+                        setMexcSecret(e.target.value);
+                        setMexcResult(null);
+                      }}
+                      className={`${inputClass} pr-11 font-mono`}
+                      placeholder="MEXC Secret Key"
+                    />
+                    <button
+                      type="button"
+                      aria-label={mexcVisible ? "Ocultar Secret Key" : "Exibir Secret Key"}
+                      onClick={() => setMexcVisible((v) => !v)}
+                      className="absolute right-1 top-1 rounded p-2 text-muted-foreground hover:text-foreground"
+                    >
+                      {mexcVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </span>
+                </label>
+              </div>
+              <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
+                <button
+                  disabled={mexcTesting || !mexcKey || !mexcSecret}
+                  onClick={testMexc}
+                  className="flex items-center justify-center gap-2 rounded-md bg-primary px-4 py-2.5 text-xs font-bold text-primary-foreground disabled:opacity-40"
+                >
+                  {mexcTesting ? (
+                    <LoaderCircle className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <CheckCircle2 className="h-4 w-4" />
+                  )}
+                  Testar MEXC & Ver Saldo USDT
+                </button>
+                {mexcResult && (
+                  <p className={`text-xs ${mexcResult.ok ? "text-buy" : "text-sell"}`}>
+                    {mexcResult.ok
+                      ? `Conectado · ${mexcResult.available.toFixed(4)} USDT disponíveis · ${mexcResult.locked.toFixed(4)} em ordens`
+                      : mexcResult.error}
+                  </p>
+                )}
+              </div>
+            </div>
+
             <p className="mt-3 flex gap-2 rounded-lg border border-border bg-muted/50 p-3 text-[11px] leading-relaxed text-muted-foreground">
               <LockKeyhole className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
               As chaves são enviadas apenas ao servidor para assinar suas chamadas e nunca entram no
-              localStorage ou nos logs. Sem a sincronização na nuvem, elas precisam ser informadas
-              novamente ao recarregar.
+              localStorage ou nos logs. Ao recarregar, informe-as novamente. O scanner/mercado usa
+              Gate.io; ordens reais podem ser roteadas para Gate.io ou MEXC.
             </p>
           </section>
 
@@ -259,12 +368,15 @@ export function SettingsModal({ open, onClose, settings, onSettings, onTest, rea
                   <ShieldAlert className="h-4 w-4 text-sell" />
                   Modo Real
                 </span>
-                <span className="text-xs text-muted-foreground">Dinheiro real na Gate.io</span>
+                <span className="text-xs text-muted-foreground">
+                  Dinheiro real na {exchangeName}
+                </span>
               </button>
             </div>
             {settings.real && (
               <p className="mt-2 text-xs font-semibold text-sell">
-                AUTO-TRADE REAL SELECIONADO · saldo conhecido: {realBalance.toFixed(4)} USDT
+                AUTO-TRADE REAL SELECIONADO ({exchangeName}) · saldo conhecido:{" "}
+                {realBalance.toFixed(4)} USDT
               </p>
             )}
           </section>

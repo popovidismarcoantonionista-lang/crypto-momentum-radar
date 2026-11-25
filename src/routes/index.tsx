@@ -26,6 +26,7 @@ import { fmtP, useTradingEngine } from "@/hooks/useTradingEngine";
 import { Card, CandleChart, Gauge, Reasons } from "@/components/bot/Widgets";
 import { SettingsModal } from "@/components/bot/SettingsModal";
 import { testGateConnection } from "@/lib/gateio.functions";
+import { testMexcConnection } from "@/lib/mexc.functions";
 import type { GateCredentials, GateOrder } from "@/lib/gateio";
 
 export const Route = createFileRoute("/")({
@@ -57,20 +58,31 @@ const brl = (value: number) =>
 
 function Dashboard() {
   const [credentials, setCredentials] = useState<GateCredentials | null>(null);
+  const [mexcCredentials, setMexcCredentials] = useState<GateCredentials | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [scannerTab, setScannerTab] = useState<"GATE" | "DEX">("GATE");
-  const engine = useTradingEngine(credentials);
+  const engine = useTradingEngine(credentials, mexcCredentials);
   const balance = engine.settings.real ? engine.realBalance : engine.paperBalance;
   const goal = engine.dayStart * (engine.settings.dailyGoalPct / 100);
   const goalProgress = Math.max(0, Math.min(100, goal > 0 ? (engine.dayPnl / goal) * 100 : 0));
   const positions = engine.positions;
+  const activeExchange = engine.settings.exchange === "MEXC" ? "MEXC" : "Gate.io";
+  const activeCreds = engine.settings.exchange === "MEXC" ? mexcCredentials : credentials;
 
-  const handleTest = async (keys: GateCredentials) => {
+  const handleTestGate = async (keys: GateCredentials) => {
     const result = await testGateConnection({ data: { credentials: keys } });
     if (result.ok) {
       setCredentials(keys);
-      engine.updateRealBalance(result.available);
+      if (engine.settings.exchange !== "MEXC") engine.updateRealBalance(result.available);
     } else setCredentials(null);
+    return result;
+  };
+  const handleTestMexc = async (keys: GateCredentials) => {
+    const result = await testMexcConnection({ data: { credentials: keys } });
+    if (result.ok) {
+      setMexcCredentials(keys);
+      if (engine.settings.exchange === "MEXC") engine.updateRealBalance(result.available);
+    } else setMexcCredentials(null);
     return result;
   };
 
@@ -99,7 +111,7 @@ function Dashboard() {
                 ) : (
                   <WifiOff className="h-3 w-3 text-sell" />
                 )}
-                Gate.io Spot ·{" "}
+                Gate.io Spot · Exec: {activeExchange} ·{" "}
                 {engine.lastUpdate
                   ? new Date(engine.lastUpdate).toLocaleTimeString("pt-BR")
                   : "conectando"}
@@ -110,7 +122,7 @@ function Dashboard() {
             className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-bold tracking-wide ${engine.settings.real ? "border-sell/50 bg-sell/15 text-sell" : "border-primary/40 bg-primary/10 text-primary"}`}
           >
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
-            {engine.settings.real ? "AUTO-TRADE REAL ATIVO" : "MODO SIMULAÇÃO"}
+            {engine.settings.real ? `AUTO-TRADE REAL ATIVO (${activeExchange})` : "MODO SIMULAÇÃO"}
           </span>
           <div className="ml-auto flex items-center gap-2 sm:gap-4">
             <div className="hidden text-right sm:block">
@@ -206,11 +218,11 @@ function Dashboard() {
             . Motor pausado automaticamente; novas entradas bloqueadas.
           </div>
         )}
-        {engine.settings.real && !credentials && (
+        {engine.settings.real && !activeCreds && (
           <div className="flex items-center gap-2 rounded-lg border border-sell/30 bg-sell/10 px-4 py-3 text-xs text-sell">
             <KeyRound className="h-4 w-4" />
-            Modo Real salvo, mas as chaves precisam ser reconectadas em Configurações antes de
-            operar ou vender.
+            Modo Real salvo, mas as chaves da {activeExchange} precisam ser reconectadas em
+            Configurações antes de operar ou vender.
           </div>
         )}
 
@@ -356,9 +368,11 @@ function Dashboard() {
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground">Conta real</span>
                   <span
-                    className={credentials ? "font-semibold text-buy" : "text-muted-foreground"}
+                    className={activeCreds ? "font-semibold text-buy" : "text-muted-foreground"}
                   >
-                    {credentials ? "CHAVES NA SESSÃO" : "NÃO CONECTADA"}
+                    {activeCreds
+                      ? `CHAVES ${activeExchange.toUpperCase()} NA SESSÃO`
+                      : "NÃO CONECTADA"}
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
@@ -370,7 +384,7 @@ function Dashboard() {
                   className="flex w-full items-center justify-center gap-2 rounded-lg border border-border bg-muted px-3 py-2.5 font-semibold hover:bg-accent"
                 >
                   <KeyRound className="h-4 w-4 text-primary" />
-                  Configurar Gate.io
+                  Configurar Corretoras / API
                 </button>
               </div>
             </Card>
@@ -390,7 +404,8 @@ function Dashboard() {
         onClose={() => setSettingsOpen(false)}
         settings={engine.settings}
         onSettings={engine.updateSettings}
-        onTest={handleTest}
+        onTestGate={handleTestGate}
+        onTestMexc={handleTestMexc}
         realBalance={engine.realBalance}
       />
     </div>
